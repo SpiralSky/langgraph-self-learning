@@ -1,0 +1,23 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "spiralsky", email = "shianastrophysics@gmail.com" }
+]
+dependencies = [
+    "ipykernel>=7.3.0",
+    "langchain>=1.3.15",
+    "langchain-community>=0.4.2",
+    "langchain-openai>=1.5.1",
+    "langgraph>=1.2.11",
+    "python-dotenv>=1.2.3",
+]
+
+[project.scripts]
+backend = "backend:main"
+
+[build-system]
+requires = ["uv_build>=0.12.4,<0.13.0"]
+build-backend = "uv_build"
