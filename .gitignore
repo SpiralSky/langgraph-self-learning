@@ -1,3 +1,11 @@
 .env
 *.ipynb
 config.yaml
+
+__pycache__/
+*.pyc
+*.pyo
+
+backend/.langgraph_api/**
+backend/chroma/**
+backend/data/**
