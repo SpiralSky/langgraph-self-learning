@@ -13,5 +13,6 @@ class LearningGraphState(TypedDict):
     analysis_results: InputAnalysisResult
     search_results: QueryResult
     draft_response: ResponseBuilderOutput
+    improved_response: ResponseBuilderOutput
 
 
