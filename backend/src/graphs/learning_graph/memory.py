@@ -2,13 +2,12 @@ from pathlib import Path
 
 from mem0 import Memory
 
-from graphs.learning_graph.config import config
-
-memory = Memory()
+from graphs.learning_graph.config import config as models_config
 
 collection_dir = str(Path(__file__).resolve().parents[3] / "data" / "mem0_db")
 
-models = config.model_providers[""]
+llm_config = models_config.get_model_data("memory_llm")
+embedder_config = models_config.get_model_data("memory_embedder")
 
 config = {
     "vector_store": {
@@ -21,18 +20,21 @@ config = {
     "llm": {
         "provider": "openai",
         "config": {
-            "model": "",
+            "model": llm_config.model_id,
             "temperature": 0.1,
-            "api_key": "your-openai-key",
-            # "openai_base_ url": "http://localhost:11434/v1"  # Optional custom endpoint
+            "api_key": llm_config.api_key,
+            "openai_base_url": llm_config.api_endpoint
         }
     },
     "embedder": {
         "provider": "openai",
         "config": {
-            "model": "text-embedding-3-small",
-            "api_key": "your-openai-key",
+            "model": llm_config.model_id,
+            "api_key": llm_config.api_key,
+            "openai_base_url": llm_config.api_endpoint
         }
     },
     "version": "v1.1"
 }
+
+memory = Memory.from_config(config)
