@@ -1,0 +1,34 @@
+# Example YAML. Simply add providers and map them to models, basically.
+provider_data:
+  openai_gpt4o_mini:
+    api_endpoint: "https://api.openai.com/v1"
+    api_key: "your-openai-api-key"
+    model_id: "gpt-4o-mini"
+
+  openai_gpt4o:
+    api_endpoint: "https://api.openai.com/v1"
+    api_key: "your-openai-api-key"
+    model_id: "gpt-4o"
+
+  openai_embedder:
+    api_endpoint: "https://api.openai.com/v1"
+    api_key: "your-openai-api-key"
+    model_id: "text-embedding-3-small"
+
+  anthropic_claude:
+    api_endpoint: "https://api.anthropic.com/v1"
+    api_key: "your-anthropic-api-key"
+    model_id: "claude-3-5-sonnet-20240620"
+
+  ollama_local:
+    api_endpoint: "http://localhost:11434/v1"
+    api_key: "ollama"
+    model_id: "llama3.2:latest"
+
+model_providers:
+  information_fetcher: "openai_gpt4o_mini"
+  input_analyzer: "openai_gpt4o_mini"
+  response_builder: "openai_gpt4o"
+  response_improver: "openai_gpt4o"
+  memory_llm: "openai_gpt4o_mini"
+  memory_embedder: "openai_embedder"
