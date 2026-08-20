@@ -2,9 +2,9 @@ import json
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import Field, BaseModel
 
 from graphs.learning_graph.config import config
+from graphs.learning_graph.pydantic_models import ResponseImproverOutput
 from graphs.learning_graph.state import LearningGraphState
 
 RESPONSE_IMPROVER_SYSTEM_PROMPT = """
@@ -47,20 +47,10 @@ Return a JSON object with:
 - `tone_applied`: The final tone descriptor.
 """
 
-class ResponseImproverOutput(BaseModel):
-    final_response: str = Field(
-        description="The final, polished response ready for the user. Must be in Markdown."
-    )
-    strategy_used: str = Field(
-        description="The pedagogical strategy applied: 'direct', 'socratic', 'scaffolding', or 'reflection'."
-    )
-    tone_applied: str = Field(
-        description="The final tone used: 'encouraging', 'formal', 'harsh_formal', or 'neutral'."
-    )
 
 def response_improver(state: LearningGraphState) -> dict[str, ResponseImproverOutput]:
-    builder_output = state['draft_response']
-    analysis = state['analysis_results']
+    builder_output = state.draft_response
+    analysis = state.analysis_results
 
     context = {
         "draft_response": builder_output.draft_response,
@@ -81,7 +71,8 @@ def response_improver(state: LearningGraphState) -> dict[str, ResponseImproverOu
         model_config.model_id,
         api_key=model_config.api_key,
         base_url=model_config.api_endpoint,
-        temperature=0
+        temperature=0,
+        model_provider="openai"
     ).with_structured_output(ResponseImproverOutput)
     result = model.invoke(messages)
 

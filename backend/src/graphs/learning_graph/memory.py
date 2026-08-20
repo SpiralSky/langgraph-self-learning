@@ -29,9 +29,9 @@ config = {
     "embedder": {
         "provider": "openai",
         "config": {
-            "model": llm_config.model_id,
-            "api_key": llm_config.api_key,
-            "openai_base_url": llm_config.api_endpoint
+            "model": embedder_config.model_id,
+            "api_key": embedder_config.api_key,
+            "openai_base_url": embedder_config.api_endpoint
         }
     },
     "version": "v1.1"

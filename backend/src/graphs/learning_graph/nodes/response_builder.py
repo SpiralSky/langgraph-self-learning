@@ -1,11 +1,11 @@
 import json
-from typing import List
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field
+from openai import BaseModel
 
 from graphs.learning_graph.config import config
+from graphs.learning_graph.pydantic_models import ResponseBuilderOutput
 
 from graphs.learning_graph.state import LearningGraphState
 
@@ -43,23 +43,21 @@ Return a JSON object with the following keys:
 - Keep the language accessible but precise.
 """
 
-class ResponseBuilderOutput(BaseModel):
-    draft_response: str = Field(
-        description="The main educational response. Integrate all pedagogical strategies here, including direct answers, socratic questions, scaffolding, or reflection prompts. Use Markdown for formatting."
-    )
-    tone: str = Field(
-        description="The specific tone applied in the response (e.g., 'encouraging', 'formal', 'direct', 'socratic', 'harsh'). This helps the final formatter verify consistency."
-    )
-    sources_used: List[str] = Field(
-        description="A list of key facts, URLs, or source titles from the search results that were used to construct the answer. Empty if based solely on internal knowledge/memory."
-    )
-
 def response_builder(state: LearningGraphState) -> dict[str, ResponseBuilderOutput]:
+    if state.user_message is None:
+        raise Exception("User message not provided")
+    if state.analysis_results is None:
+        raise Exception("Analysis results not provided")
+    if state.memory_results is None:
+        raise Exception("Memory results not provided")
+    if state.search_results is None:
+        raise Exception("Search results not provided")
+
     context = {
-        "user_message": state['user_message'].content,
-        "analysis_results": state['analysis_results'].model_dump(),
-        "memory_results": state['memory_results'],
-        "search_results": state['search_results'].model_dump() if hasattr(state['search_results'], 'dict') else state['search_results']
+        "user_message": state.user_message.content,
+        "analysis_results": state.analysis_results.model_dump(),
+        "memory_results": state.memory_results,
+        "search_results": state.search_results.model_dump() if hasattr(state.search_results, 'dict') else state.search_results
     }
 
     context_json = json.dumps(context, indent=2, default=str)
@@ -70,7 +68,8 @@ def response_builder(state: LearningGraphState) -> dict[str, ResponseBuilderOutp
         model_config.model_id,
         api_key=model_config.api_key,
         base_url=model_config.api_endpoint,
-        temperature=0
+        temperature=0,
+        model_provider="openai"
     ).with_structured_output(ResponseBuilderOutput)
 
     res = model.invoke(

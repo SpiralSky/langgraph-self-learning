@@ -1,19 +1,23 @@
-from typing import TypedDict
+from typing import TypedDict, Annotated, List, Optional
 
-from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, BaseMessage
+from langgraph.graph import add_messages
+from pydantic import BaseModel, Field
 
-from graphs.learning_graph.nodes.information_fetcher import QueryResult
-from graphs.learning_graph.nodes.input_analyzer import InputAnalysisResult
-from graphs.learning_graph.nodes.response_builder import ResponseBuilderOutput
+from graphs.learning_graph.pydantic_models import InputAnalysisResult, ResponseBuilderOutput, ResponseImproverOutput, \
+    QueryResult
 
 
 class LearningGraphState(BaseModel):
-    user_message: HumanMessage
-    memory_results: list[dict]
-    analysis_results: InputAnalysisResult
-    search_results: QueryResult
-    draft_response: ResponseBuilderOutput
-    improved_response: ResponseBuilderOutput
+    messages: Annotated[List[BaseMessage], add_messages] = []
+
+    user_message: Optional[BaseMessage] = None
+
+    memory_results: List[dict] | None = Field(default_factory=list)
+    analysis_results: Optional[InputAnalysisResult] = None
+    search_results: Optional[QueryResult] = None
+    draft_response: Optional[ResponseBuilderOutput] = None
+    improved_response: Optional[ResponseImproverOutput] = None
+
 
 

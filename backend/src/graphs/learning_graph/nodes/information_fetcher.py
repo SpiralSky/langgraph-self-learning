@@ -1,12 +1,11 @@
 import textwrap
-from typing import List
 
 from langchain.chat_models import init_chat_model
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field
 
 from graphs.learning_graph.config import config
+from graphs.learning_graph.pydantic_models import FetcherOutput, QueryResult
 from graphs.learning_graph.state import LearningGraphState
 
 # TODO: Update to non-hardcoded search tool
@@ -54,25 +53,6 @@ Output: {
 - Do not answer the user's question in this step. Only prepare the information retrieval strategy.
 """
 
-class FetcherOutput(BaseModel):
-    knowledge: str = Field(
-        description="A concise summary of what the LLM already knows. If unknown, leave empty."
-    )
-    confidence: float = Field(
-        description="0.0-1.0. High (>0.8) for basic facts. Medium (0.5-0.8) for niche topics. Low (<0.5) for recent/ambiguous data."
-    )
-    search_queries: List[str] = Field(
-        description="List of keyword-rich search queries. ONLY populate if confidence < 0.8. Use boolean operators if needed."
-    )
-    reasoning: str = Field(
-        description="Brief justification for the confidence score and query choice."
-    )
-
-class QueryResult(BaseModel):
-    confidence: float
-    information: str
-    queries: str
-    reasoning: str
 
 def information_fetcher(state: LearningGraphState) -> dict[str, QueryResult]:
     model_config = config.get_model_data("information_fetcher")
@@ -81,17 +61,18 @@ def information_fetcher(state: LearningGraphState) -> dict[str, QueryResult]:
         model_config.model_id,
         api_key=model_config.api_key,
         base_url=model_config.api_endpoint,
-        temperature=0
+        temperature=0,
+        model_provider="openai"
     ).with_structured_output(FetcherOutput)
 
-    analysis = state['analysis_results']
-    user_input = state['user_message']
+    analysis = state.analysis_results
+    user_input = state.user_message
 
     information_str = textwrap.dedent(f"""
         User Input: {user_input}
         Intent: {analysis.intent}
         Key Points: {analysis.key_points}
-        Memory Context: {state["memory_results"]}
+        Memory Context: {state.memory_results}
     """)
 
     result = model.invoke(

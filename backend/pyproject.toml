@@ -19,6 +19,15 @@ dependencies = [
     "mem0ai>=2.0.18",
     "chromadb>=1.5.9",
     "duckduckgo-search>=8.1.1",
+    "langserve>=0.3.3",
+    "langgraph-cli>=0.4.31",
+    "fastapi>=0.141.1",
+    "ddgs>=9.15.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.44.0",
+    "opentelemetry-exporter-otlp-proto-common>=1.44.0",
+    "opentelemetry-sdk>=1.44.0",
+    "sse-starlette>=3.3.4",
+    "langgraph-api[inmem]>=0.10.3",
 ]
 
 [project.scripts]

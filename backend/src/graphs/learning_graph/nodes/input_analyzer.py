@@ -1,30 +1,11 @@
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage
 
 from graphs.learning_graph.config import config
+from graphs.learning_graph.pydantic_models import InputAnalysisResult
 from graphs.learning_graph.state import LearningGraphState
 
-from pydantic import BaseModel, Field
-from typing import List, Optional, Any
-
-
-class InputAnalysisResult(BaseModel):
-    is_clear: bool = Field(
-        description="True if the question is specific enough to answer without guessing intent."
-    )
-    intent: str = Field(
-        description="The primary intent: 'factual', 'conceptual', 'problem_solving', 'debugging', or 'unclear'."
-    )
-    key_points: List[str] = Field(
-        description="Extracted core concepts or entities from the user's input. Empty if unclear."
-    )
-    comments: str = Field(
-        description="Natural language feedback for the user. If clear, praise specificity. If unclear, gently explain what is missing."
-    )
-    suggested_clarifications: Optional[List[str]] = Field(
-        default=None,
-        description="If is_clear is False, provide 1-2 specific questions to ask the user to resolve ambiguity."
-    )
+from typing import Any
 
 INPUT_ANALYSER_PROMPT = """
 You are an expert Pedagogical Input Analyst. Analyze the user's question for clarity, intent, and key concepts.
@@ -50,7 +31,7 @@ Return a valid JSON object matching the schema provided. Do not include markdown
 """
 
 def input_analyzer(state: LearningGraphState) -> dict[str, Any]:
-    user_message = state["user_message"]
+    user_message = state.user_message
 
     model_config = config.get_model_data("input_analyzer")
 
@@ -58,7 +39,8 @@ def input_analyzer(state: LearningGraphState) -> dict[str, Any]:
         model_config.model_id,
         api_key=model_config.api_key,
         base_url=model_config.api_endpoint,
-        temperature=0
+        temperature=0,
+        model_provider="openai"
     ).with_structured_output(InputAnalysisResult)
 
     analysis = model.invoke(

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from pydantic import BaseModel
-from sqlalchemy.testing.plugin.plugin_base import read_config
 from yaml import safe_load
 
 
@@ -29,10 +28,7 @@ class Config(BaseModel):
         model_name = self.model_providers[name]
         return self.provider_data[model_name]
 
-
-config: Config = read_config(PROJECT_ROOT / "config.yaml")
-
-def read_config(path: Path) -> Config | None:
+def read_config(path: Path) -> Config:
     """
     Reads config.yaml to get model data such as: API key, endpoint and model id.
     :return: Dictionary mapping model names to model data.
@@ -44,4 +40,8 @@ def read_config(path: Path) -> Config | None:
             parsed_config = Config(**yaml)
             return parsed_config
         except Exception as e:
-            print(f"Failed to parse config: {e}")
+            raise ValueError("Failed to parse config: {e}")
+
+
+config: Config = read_config(PROJECT_ROOT / "config.yaml")
+
