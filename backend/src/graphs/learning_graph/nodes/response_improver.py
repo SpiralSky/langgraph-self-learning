@@ -58,7 +58,7 @@ class ResponseImproverOutput(BaseModel):
         description="The final tone used: 'encouraging', 'formal', 'harsh_formal', or 'neutral'."
     )
 
-def response_improver_node(state: LearningGraphState) -> dict[str, ResponseImproverOutput]:
+def response_improver(state: LearningGraphState) -> dict[str, ResponseImproverOutput]:
     builder_output = state['draft_response']
     analysis = state['analysis_results']
 
