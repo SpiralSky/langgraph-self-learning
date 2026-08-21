@@ -1,6 +1,7 @@
 from langgraph.constants import START, END
 from langgraph.graph import StateGraph
 
+from graphs.learning_graph.nodes.format_output import format_output
 from graphs.learning_graph.nodes.model_output import model_output
 from graphs.learning_graph.nodes.user_input import user_input
 from graphs.learning_graph.nodes.information_fetcher import information_fetcher
@@ -21,6 +22,7 @@ builder.add_node("input_analyzer", input_analyzer)
 builder.add_node("retrieve_memory", retrieve_memory)
 builder.add_node("response_builder", response_builder)
 builder.add_node("response_improver", response_improver)
+builder.add_node("format_output", format_output)
 
 builder.add_edge(START, "user_input")
 builder.add_edge("user_input", "retrieve_memory")
@@ -28,7 +30,8 @@ builder.add_edge("retrieve_memory", "input_analyzer")
 builder.add_edge("input_analyzer", "information_fetcher")
 builder.add_edge("information_fetcher", "response_builder")
 builder.add_edge("response_builder", "response_improver")
-builder.add_edge("response_improver", "model_output")
+builder.add_edge("response_improver", "format_output")
+builder.add_edge("format_output", "model_output")
 builder.add_edge("model_output", END)
 
 graph = builder.compile()

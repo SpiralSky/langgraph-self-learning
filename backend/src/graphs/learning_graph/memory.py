@@ -5,13 +5,14 @@ from mem0 import Memory
 from graphs.learning_graph.config import config as models_config
 
 collection_dir = str(Path(__file__).resolve().parents[3] / "data" / "mem0_db")
+Path(collection_dir).mkdir(parents=True, exist_ok=True)
 
 llm_config = models_config.get_model_data("memory_llm")
 embedder_config = models_config.get_model_data("memory_embedder")
 
 config = {
     "vector_store": {
-        "provider": "chroma",
+        "provider": "qdrant",
         "config": {
             "collection_name": "user_memories",
             "path": collection_dir,
@@ -34,7 +35,8 @@ config = {
             "openai_base_url": embedder_config.api_endpoint
         }
     },
-    "version": "v1.1"
+    "version": "v1.1",
+    "enable_telemetry": False
 }
 
 memory = Memory.from_config(config)

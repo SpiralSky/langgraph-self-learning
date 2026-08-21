@@ -18,6 +18,7 @@ class LearningGraphState(BaseModel):
     search_results: Optional[QueryResult] = None
     draft_response: Optional[ResponseBuilderOutput] = None
     improved_response: Optional[ResponseImproverOutput] = None
+    final_output: Optional[str] = None
 
 
 
