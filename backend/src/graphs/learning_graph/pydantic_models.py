@@ -14,7 +14,7 @@ class FetcherOutput(BaseModel):
         description="List of keyword-rich search queries. ONLY populate if confidence < 0.8. Use boolean operators if needed."
     )
     reasoning: str = Field(
-        description="Brief justification for the confidence score and query choice."
+        description="Brief justification of the confidence score and query choice."
     )
 
 
@@ -49,6 +49,34 @@ class ResponseBuilderOutput(BaseModel):
     )
 
 
+class SessionDelta(BaseModel):
+    topic: str = Field(
+        description="The consolidated current learning topic for the session."
+    )
+    ledger_updates: List[str] = Field(
+        default_factory=list,
+        description="New ledger entries capturing what the learner knows or struggles with, e.g. 'knows X', 'struggles with Y'."
+    )
+    continue_session: bool = Field(
+        default=True,
+        description="False when the topic is exhausted and the session should rotate to a new topic."
+    )
+
+
+class SessionRecord(BaseModel):
+    session_id: str = Field(description="Short unique id for the learning session.")
+    thread_id: str = Field(description="Thread/conversation the session belongs to.")
+    topic: str = Field(description="Consolidated active learning topic.")
+    ledger: List[str] = Field(
+        default_factory=list,
+        description="Condensed, capped list of what the learner knows or struggles with."
+    )
+    turn_count: int = Field(default=0, description="Number of turns contributing to the session.")
+    created_at: float = Field(default=0.0, description="Unix timestamp of creation.")
+    updated_at: float = Field(default=0.0, description="Unix timestamp of last update.")
+    status: str = Field(default="active", description="Session lifecycle status.")
+
+
 class ResponseImproverOutput(BaseModel):
     final_response: str = Field(
         description="The final, polished response ready for the user. Must be in Markdown."
@@ -58,6 +86,10 @@ class ResponseImproverOutput(BaseModel):
     )
     tone_applied: str = Field(
         description="The final tone used: 'encouraging', 'formal', 'harsh_formal', or 'neutral'."
+    )
+    session_delta: Optional[SessionDelta] = Field(
+        default=None,
+        description="Summary of what the learner demonstrably now knows or still struggles with after this exchange. Used to persist the learning session; empty if the exchange does not advance one."
     )
 
 

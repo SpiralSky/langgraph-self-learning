@@ -1,9 +1,8 @@
 from typing import Any
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage
 
-from graphs.learning_graph.config import config
+from graphs.learning_graph.llm import get_structured_model
 from graphs.learning_graph.pydantic_models import InputAnalysisResult
 from graphs.learning_graph.state import LearningGraphState
 
@@ -43,15 +42,7 @@ def input_analyzer(state: LearningGraphState) -> dict[str, Any]:
     """
     user_message = state.user_message
 
-    model_config = config.get_model_data("input_analyzer")
-
-    model = init_chat_model(
-        model_config.model_id,
-        api_key=model_config.api_key,
-        base_url=model_config.api_endpoint,
-        temperature=0,
-        model_provider="openai"
-    ).with_structured_output(InputAnalysisResult)
+    model = get_structured_model("input_analyzer", InputAnalysisResult)
 
     recent_history = state.messages[-RECENT_HISTORY_WINDOW - 1:-1]
 

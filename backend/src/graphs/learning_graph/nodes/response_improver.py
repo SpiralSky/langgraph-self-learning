@@ -1,9 +1,8 @@
 import json
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from graphs.learning_graph.config import config
+from graphs.learning_graph.llm import get_structured_model
 from graphs.learning_graph.pydantic_models import ResponseImproverOutput
 from graphs.learning_graph.state import LearningGraphState
 
@@ -27,11 +26,16 @@ Rules:
    - Keep Markdown clean (headers, bolding, lists).
    - Produce plain Markdown only: never use HTML tags or widget markup (e.g. `<div data-widget="...">` or `:::` fences) — widget formatting is applied downstream.
    - Weave Socratic/Reflection questions naturally into the flow, not just appended at the end.
+7. Session tracking:
+   - Fill `session_delta` with the consolidated learning `topic` and a short list of `ledger_updates` capturing what the learner demonstrably now knows or still struggles with after this exchange (e.g. "knows list slicing", "struggles with nested loops").
+   - Set `continue_session` to false only when the topic is exhausted and the learner should move on to a new topic.
+   - Leave `session_delta` null when this exchange does not advance a learning session.
 
 Output JSON:
 - `final_response`: str, refined Markdown
 - `strategy_used`: str, primary strategy applied
 - `tone_applied`: str, final tone descriptor
+- `session_delta`: object|null, session update as described above
 """
 
 
@@ -73,14 +77,7 @@ def response_improver(state: LearningGraphState) -> dict[str, ResponseImproverOu
         HumanMessage(content=json.dumps(context, indent=2, default=str))
     ]
 
-    model_config = config.get_model_data("response_improver")
-    model = init_chat_model(
-        model_config.model_id,
-        api_key=model_config.api_key,
-        base_url=model_config.api_endpoint,
-        temperature=0,
-        model_provider="openai"
-    ).with_structured_output(ResponseImproverOutput)
+    model = get_structured_model("response_improver", ResponseImproverOutput)
     result = model.invoke(messages)
 
     # noinspection bad-return

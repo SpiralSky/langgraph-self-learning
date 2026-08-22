@@ -1,10 +1,9 @@
 import json
 import re
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from graphs.learning_graph.config import config
+from graphs.learning_graph.llm import get_chat_model
 from graphs.learning_graph.state import LearningGraphState
 
 FORMAT_OUTPUT_SYSTEM_PROMPT = """You are a formatting expert. Improve the readability and visual appeal of the given response with markdown.
@@ -125,15 +124,7 @@ def format_output(state: LearningGraphState) -> dict[str, str]:
         HumanMessage(content=json.dumps(context, indent=2, default=str))
     ]
 
-    model_config = config.get_model_data("format_output")
-    model = init_chat_model(
-        model_config.model_id,
-        api_key=model_config.api_key,
-        base_url=model_config.api_endpoint,
-        temperature=0.2,
-        model_provider="openai"
-    )
-
+    model = get_chat_model("format_output", temperature=0.2)
     result = model.invoke(messages)
 
     formatted = result.content
