@@ -1,4 +1,5 @@
 import textwrap
+from concurrent.futures import ThreadPoolExecutor
 
 from langchain.chat_models import init_chat_model
 from langchain_community.tools import DuckDuckGoSearchRun
@@ -89,14 +90,17 @@ def information_fetcher(state: LearningGraphState) -> dict[str, QueryResult]:
 
     query_results_str = ""
 
+    def _run_search(query: str) -> str:
+        try:
+            res = search_tool.invoke(query)
+            return f"\n[SUCCESS for Query: {query}]: {str(res)}\n"
+        except Exception as e:
+            return f"\n[FAILED for Query: {query}]: {str(e)}\n"
+
     # noinspection unresolved-references
     if queries := result.search_queries:
-        for query in queries:
-            try:
-                res = search_tool.invoke(query)
-                query_results_str += f"\n[SUCCESS for Query: {query}]: {str(res)}\n"
-            except Exception as e:
-                query_results_str += f"\n[FAILED for Query: {query}]: {str(e)}\n"
+        with ThreadPoolExecutor() as executor:
+            query_results_str = "".join(executor.map(_run_search, queries))
 
     # noinspection unresolved-references
     return {

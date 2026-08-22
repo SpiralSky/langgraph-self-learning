@@ -25,6 +25,7 @@ Rules:
 3. Content integrity:
    - Cite every `sources_used` item in the text, or list them at the bottom if confidence was low.
    - Keep Markdown clean (headers, bolding, lists).
+   - Produce plain Markdown only: never use HTML tags or widget markup (e.g. `<div data-widget="...">` or `:::` fences) — widget formatting is applied downstream.
    - Weave Socratic/Reflection questions naturally into the flow, not just appended at the end.
 
 Output JSON:

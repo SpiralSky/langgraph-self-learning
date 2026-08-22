@@ -1,13 +1,17 @@
 import json
+import time
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage
+from langchain_core.runnables import Runnable
 
 from graphs.learning_graph.config import config
 from graphs.learning_graph.pydantic_models import ResponseBuilderOutput
 from graphs.learning_graph.state import LearningGraphState
 
 RECENT_HISTORY_WINDOW = 3
+STRUCTURED_OUTPUT_RETRY_ATTEMPTS = 3
+STRUCTURED_OUTPUT_RETRY_BACKOFF_SECONDS = 1.0
 
 RESPONSE_BUILDER_SYSTEM_PROMPT = """
 You are an AI Tutor. Synthesize the provided context into a helpful, accurate, pedagogically sound response.
@@ -20,6 +24,7 @@ Guidelines:
 - Continuity: use `conversation_history` to answer follow-up questions coherently, resolving pronouns and references to earlier topics instead of repeating them.
 - Intent: align style (direct for 'factual', analogies for 'conceptual').
 - Ambiguity: if clarity is low, state the assumption you're making before answering.
+- Markdown only: keep `response_content` as plain Markdown; never use HTML tags or widget markup (e.g. `<div data-widget="...">` or `:::` fences) — widget formatting is applied downstream.
 
 Strategy by intent:
 - Factual: answer clearly, then add "Why it matters".
@@ -64,6 +69,37 @@ def _message_to_text(message: BaseMessage) -> str:
 
         case _:
             return str(message.content)
+
+
+def _invoke_structured_with_retry(
+    model: Runnable[list[BaseMessage], ResponseBuilderOutput],
+    messages: list[BaseMessage]
+) -> ResponseBuilderOutput:
+    """
+    Invoke a structured-output model, retrying transient JSON parse failures.
+
+    The SDK's streaming accumulator can surface a ``ValueError`` when the
+    upstream endpoint emits an empty or unparseable delta for a single chunk;
+    re-invoking the model gives it another chance to produce valid JSON.
+
+    :param model: Runnable configured with ``with_structured_output``.
+    :type model: Runnable
+    :param messages: Prompt messages to pass to the model.
+    :type messages: list[BaseMessage]
+    :return: The parsed structured output.
+    :rtype: ResponseBuilderOutput
+    :raises ValueError: If every attempt fails to produce parseable output.
+    """
+    last_error: ValueError | None = None
+    for attempt in range(STRUCTURED_OUTPUT_RETRY_ATTEMPTS):
+        try:
+            return model.invoke(messages)
+        except ValueError as e:
+            last_error = e
+            if attempt < STRUCTURED_OUTPUT_RETRY_ATTEMPTS - 1:
+                time.sleep(STRUCTURED_OUTPUT_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    if last_error is not None:
+        raise last_error
 
 
 def response_builder(state: LearningGraphState) -> dict[str, ResponseBuilderOutput]:
@@ -126,7 +162,8 @@ def response_builder(state: LearningGraphState) -> dict[str, ResponseBuilderOutp
         model_provider="openai"
     ).with_structured_output(ResponseBuilderOutput)
 
-    res = model.invoke(
+    res = _invoke_structured_with_retry(
+        model,
         [
             SystemMessage(RESPONSE_BUILDER_SYSTEM_PROMPT),
             HumanMessage(f"Current Learning Context:\n{context_json}")
