@@ -5,6 +5,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from graphs.learning_graph.config import config
 from graphs.learning_graph.state import LearningGraphState
+from util.validation import requires_present
 
 FORMAT_OUTPUT_SYSTEM_PROMPT = """You are a formatting expert. Improve the readability and visual appeal of the given response with markdown.
 
@@ -40,12 +41,10 @@ def format_output(state: LearningGraphState) -> dict[str, str]:
     :return: Mapping the state key ``"final_output"`` to the formatted markdown
         response string ready for the chat UI.
     :rtype: dict[str, str]
-    :raises ValueError: If ``state.improved_response`` is empty or missing.
+    :raises ValueError: If ``state.improved_response`` is missing.
     """
+    requires_present(improved_response=state.improved_response)
     improved_response = state.improved_response
-
-    if not improved_response:
-        raise ValueError("Improved response is required but not present in state")
 
     context = {
         "response_to_format": improved_response.final_response,

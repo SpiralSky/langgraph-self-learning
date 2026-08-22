@@ -2,12 +2,11 @@ import json
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
-from openai import BaseModel
 
 from graphs.learning_graph.config import config
 from graphs.learning_graph.pydantic_models import ResponseBuilderOutput
-
 from graphs.learning_graph.state import LearningGraphState
+from util.validation import requires_present
 
 RESPONSE_BUILDER_SYSTEM_PROMPT = """
 You are an AI Tutor. Synthesize the provided context into a helpful, accurate, pedagogically sound response.
@@ -49,16 +48,14 @@ def response_builder(state: LearningGraphState) -> dict[str, ResponseBuilderOutp
     :return: Mapping the state key ``"draft_response"`` to a
         :class:`ResponseBuilderOutput`.
     :rtype: dict[str, ResponseBuilderOutput]
-    :raises Exception: If any of the required state fields are missing.
+    :raises ValueError: If any of the required state fields are missing.
     """
-    if state.user_message is None:
-        raise Exception("User message not provided")
-    if state.analysis_results is None:
-        raise Exception("Analysis results not provided")
-    if state.memory_results is None:
-        raise Exception("Memory results not provided")
-    if state.search_results is None:
-        raise Exception("Search results not provided")
+    requires_present(
+        user_message=state.user_message,
+        analysis_results=state.analysis_results,
+        memory_results=state.memory_results,
+        search_results=state.search_results,
+    )
 
     context = {
         "user_message": state.user_message.content,
