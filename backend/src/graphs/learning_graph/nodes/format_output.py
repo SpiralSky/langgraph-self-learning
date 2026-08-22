@@ -35,7 +35,8 @@ Rules:
    :::text title="Important Note" color="blue"
    Your note content here
    :::
-5. Preservation: keep all facts and meaning; add no new information and change no substance; only enhance presentation so the output is clean, professional, and easy to scan."""
+5. Math: render mathematical expressions with LaTeX in KaTeX delimiters — inline math uses `$...$` (e.g. `$E = mc^2$`), display math uses `$$...$$` on its own line (e.g. `$$\int_0^1 x^2\,dx$$`). Write the LaTeX source directly; never use ASCII-art equations.
+6. Preservation: keep all facts and meaning; add no new information and change no substance; only enhance presentation so the output is clean, professional, and easy to scan."""
 
 _WIDGET_DIV_RE = re.compile(
     r'<div\s+data-widget="(?P<widget>text|code)"(?P<attrs>[^>]*)>(?P<body>.*?)</div>',
