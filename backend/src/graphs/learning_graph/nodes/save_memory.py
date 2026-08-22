@@ -3,7 +3,6 @@ from langchain_core.runnables import RunnableConfig
 
 from graphs.learning_graph.memory import memory
 from graphs.learning_graph.state import LearningGraphState
-from util.validation import requires_present
 
 
 def _message_to_text(message: BaseMessage) -> str:
@@ -54,7 +53,8 @@ def save_memory(state: LearningGraphState, config: RunnableConfig) -> dict:
     :rtype: dict
     :raises ValueError: If the user message is missing.
     """
-    requires_present(user_message=state.user_message)
+    if state.user_message is None:
+        raise ValueError("Missing required field(s): user_message")
 
     thread_id = config.get("configurable", {}).get("thread_id", "default_thread")
 

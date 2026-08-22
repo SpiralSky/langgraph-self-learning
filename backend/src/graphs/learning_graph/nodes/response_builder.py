@@ -6,7 +6,6 @@ from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AI
 from graphs.learning_graph.config import config
 from graphs.learning_graph.pydantic_models import ResponseBuilderOutput
 from graphs.learning_graph.state import LearningGraphState
-from util.validation import requires_present
 
 RECENT_HISTORY_WINDOW = 3
 
@@ -85,12 +84,19 @@ def response_builder(state: LearningGraphState) -> dict[str, ResponseBuilderOutp
     :rtype: dict[str, ResponseBuilderOutput]
     :raises ValueError: If any of the required state fields are missing.
     """
-    requires_present(
-        user_message=state.user_message,
-        analysis_results=state.analysis_results,
-        memory_results=state.memory_results,
-        search_results=state.search_results,
-    )
+    if state.user_message is None:
+        raise ValueError("Missing required field(s): user_message")
+    if state.analysis_results is None:
+        raise ValueError("Missing required field(s): analysis_results")
+    if state.memory_results is None:
+        raise ValueError("Missing required field(s): memory_results")
+    if state.search_results is None:
+        raise ValueError("Missing required field(s): search_results")
+
+    user_message = state.user_message
+    analysis_results = state.analysis_results
+    memory_results = state.memory_results
+    search_results = state.search_results
 
     conversation_history = [
         {

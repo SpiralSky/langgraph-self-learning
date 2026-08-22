@@ -6,7 +6,6 @@ from langchain_core.runnables import RunnableConfig
 
 from graphs.learning_graph.state import LearningGraphState
 from graphs.learning_graph.memory import memory
-from util.validation import requires_present
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3] / "data"
 
@@ -29,7 +28,8 @@ def retrieve_memory(state: LearningGraphState, config: RunnableConfig) -> dict[s
     :rtype: dict[str, Any]
     :raises ValueError: If the user message is missing or empty.
     """
-    requires_present(user_message=state.user_message)
+    if state.user_message is None:
+        raise ValueError("Missing required field(s): user_message")
     message = state.user_message
 
     message_content = ""

@@ -6,7 +6,6 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from graphs.learning_graph.config import config
 from graphs.learning_graph.pydantic_models import ResponseImproverOutput
 from graphs.learning_graph.state import LearningGraphState
-from util.validation import requires_present
 
 RESPONSE_IMPROVER_SYSTEM_PROMPT = """
 You are a Pedagogical Editor. Refine the draft response so it aligns with the user's learning needs and input quality.
@@ -52,10 +51,10 @@ def response_improver(state: LearningGraphState) -> dict[str, ResponseImproverOu
     :raises ValueError: If ``draft_response`` or ``analysis_results`` is
         missing from state.
     """
-    requires_present(
-        draft_response=state.draft_response,
-        analysis_results=state.analysis_results,
-    )
+    if state.draft_response is None:
+        raise ValueError("Missing required field(s): draft_response")
+    if state.analysis_results is None:
+        raise ValueError("Missing required field(s): analysis_results")
     builder_output = state.draft_response
     analysis = state.analysis_results
 

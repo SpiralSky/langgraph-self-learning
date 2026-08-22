@@ -7,7 +7,6 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from graphs.learning_graph.config import config
 from graphs.learning_graph.pydantic_models import FetcherOutput, QueryResult
 from graphs.learning_graph.state import LearningGraphState
-from util.validation import requires_present
 
 # TODO: Update to non-hardcoded search tool
 search_tool = DuckDuckGoSearchRun()
@@ -66,10 +65,10 @@ def information_fetcher(state: LearningGraphState) -> dict[str, QueryResult]:
         model_provider="openai"
     ).with_structured_output(FetcherOutput)
 
-    requires_present(
-        analysis_results=state.analysis_results,
-        user_message=state.user_message,
-    )
+    if state.analysis_results is None:
+        raise ValueError("Missing required field(s): analysis_results")
+    if state.user_message is None:
+        raise ValueError("Missing required field(s): user_message")
 
     analysis = state.analysis_results
     user_input = state.user_message
