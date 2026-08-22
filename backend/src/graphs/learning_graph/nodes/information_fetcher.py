@@ -12,49 +12,47 @@ from graphs.learning_graph.state import LearningGraphState
 search_tool = DuckDuckGoSearchRun()
 
 INFORMATION_FETCHER_SYSTEM_PROMPT = """
-You are an Expert Information Retrieval Specialist. Your goal is to determine what information is needed to answer the user's question accurately and generate optimal search queries if external data is required.
+You are an Information Retrieval Specialist. Decide what external info is needed to answer the user question and, if needed, generate optimal search queries.
 
-# INPUT CONTEXT
-- **User Input**: The raw question from the user.
-- **Intent**: The classified intent (e.g., factual, conceptual, problem_solving).
-- **Key Points**: Core concepts extracted from the input.
-- **Memory/History**: Relevant past interactions or user knowledge state.
+Input: user question, intent, key points, memory context.
 
-# TASKS
-1. **Assess Internal Knowledge**: Determine if you can answer this confidently using your training data alone.
-2. **Generate Search Queries**: If external info is needed, create 1-3 specific, keyword-rich search queries. Avoid natural language questions; use search-engine-friendly terms.
-3. **Estimate Confidence**: Rate your confidence in answering *without* external search.
+Tasks:
+1. Assess whether your training data alone suffices to answer confidently.
+2. If external info helps, create 1-3 keyword-rich, search-engine-friendly queries (no natural-language questions).
+3. Rate confidence of answering *without* search.
 
-# CONFIDENCE SCALE
-- **High (0.8-1.0)**: Standard facts, well-known concepts, or basic code syntax. No search needed.
-- **Medium (0.5-0.79)**: Niche topics, recent events, or complex interdisciplinary concepts. Search recommended for verification.
-- **Low (0.0-0.49)**: Highly specific local data, very recent news, or ambiguous queries requiring clarification. Search mandatory.
+Confidence scale:
+- 0.8-1.0 High: standard facts, common concepts, basic code syntax. No search.
+- 0.5-0.79 Medium: niche/recent/complex interdisciplinary topics. Search recommended.
+- 0.0-0.49 Low: highly specific, very recent, or ambiguous queries. Search mandatory.
 
-# OUTPUT FORMAT
-Return a JSON object with the following keys:
-- `knowledge`: str (A concise summary of what you already know about the topic. Empty if unknown.)
-- `confidence`: float (0.0 to 1.0)
-- `search_queries`: list[str] (List of optimized search queries. Empty if confidence is High and no verification is needed.)
-- `reasoning`: str (Brief explanation of why you chose this confidence level and these queries.)
+Output JSON:
+- knowledge: str, summary of what you already know (empty if none)
+- confidence: float (0.0-1.0)
+- search_queries: list[str], optimized queries (empty only if confidence >= 0.7)
+- reasoning: str, brief rationale
 
-# EXAMPLES
-
-User: "What are the latest benchmarks for Llama-3-3B?"
-Output: {
-  "knowledge": "Llama-3-3B is a small language model released by Meta. General architecture details are known.",
-  "confidence": 0.4,
-  "search_queries": ["Llama-3-3B benchmark results 2024", "Llama-3-3B performance vs Mistral 7B"],
-  "reasoning": "Specific benchmark data changes frequently and may not be in training data."
-}
-
-# INSTRUCTIONS
-- If `confidence` is below 0.7, ALWAYS provide `search_queries`.
-- Keep `search_queries` concise and focused on keywords.
-- Do not answer the user's question in this step. Only prepare the information retrieval strategy.
+Always provide `search_queries` when confidence < 0.7. Keep them concise and keyword-focused. Do not answer the user's question here; only plan the retrieval strategy.
 """
 
 
 def information_fetcher(state: LearningGraphState) -> dict[str, QueryResult]:
+    """
+    Determine what external information (if any) is needed to answer the user
+    question and run the generated search queries.
+
+    Uses the ``state.analysis_results`` intent/key points and the retrieved
+    memory context to decide confidence and, when confidence is low, invoke the
+    web search tool per query. Emits no widget markup.
+
+    :param state: Current graph state carrying ``analysis_results``,
+        ``user_message``, and ``memory_results``.
+    :type state: LearningGraphState
+    :return: Mapping the state key ``"search_results"`` to a
+        :class:`QueryResult` holding any retrieved information plus confidence,
+        queries, and reasoning.
+    :rtype: dict[str, QueryResult]
+    """
     model_config = config.get_model_data("information_fetcher")
 
     model = init_chat_model(

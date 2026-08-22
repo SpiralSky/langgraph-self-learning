@@ -13,10 +13,20 @@ client = chromadb.PersistentClient()
 
 def retrieve_memory(state: LearningGraphState, config: RunnableConfig) -> dict[str, Any]:
     """
-    Used to retrieve memories from memory collection in chromadb.
-    :param state: Graph Node.
-    :param config: RunnableConfig provided by LangGraph.
-    :return:
+    Retrieve relevant past memories from the vector store for the current thread.
+
+    Extracts plain-text content from the user message (handling both ``str`` and
+    block-list content), scopes the search to the thread id from the run config,
+    and returns the ranked memory hits. Emits no widget markup.
+
+    :param state: Current graph state carrying ``user_message``.
+    :type state: LearningGraphState
+    :param config: LangGraph run configuration, read for the ``thread_id``.
+    :type config: RunnableConfig
+    :return: Mapping the state key ``"memory_results"`` to the list of matched
+        memory snippets for the thread.
+    :rtype: dict[str, Any]
+    :raises ValueError: If the user message is missing or empty.
     """
     message_content = ""
 
