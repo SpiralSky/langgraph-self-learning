@@ -9,3 +9,5 @@ __pycache__/
 backend/.langgraph_api/**
 backend/chroma/**
 backend/data/**
+backend/plans/**
+shared/keys/graph_to_code*
