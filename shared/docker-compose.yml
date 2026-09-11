@@ -1,0 +1,84 @@
+name: code-exec-sandbox
+
+networks:
+  frontend-net:
+    driver: bridge
+  code-net:
+    internal: true
+  mgmt-net:
+    driver: bridge
+
+volumes:
+  backend-data:
+
+services:
+  frontend:
+    build: ./../agent-chat-ui
+    networks: [frontend-net, mgmt-net]
+    ports:
+      - "3000:3000"
+    environment:
+      LANGGRAPH_API_URL: "http://backend:2024"
+      NEXT_PUBLIC_API_URL: "http://localhost:3000/api"
+      LEDGER_PATH: "/shared/ledger"
+    volumes:
+      - ./ledger:/shared/ledger:ro
+    depends_on: [backend]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "frontend"
+
+  backend:
+    build: ./../backend
+    # langgraph dev --port 2024; API binds to frontend-net IP only (eth0 = first-listed network) so code-net can't reach it.
+    networks:
+      - frontend-net
+      - code-net
+    ports:
+      - "2024:2024"
+    env_file:
+      - ../backend/.env
+    volumes:
+      - ../backend:/app
+      - backend-data:/app/data
+      - ./ledger:/shared/ledger:ro
+      - ./keys/graph_to_code:/app/.ssh/graph_to_code:ro
+      - ./workspace:/shared/workspace
+    depends_on: [code-runner]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "backend"
+
+  code-runner:
+    image: code-runner:base
+    build:
+      context: ./dockerfile/code-runner
+    networks: [code-net]
+    # No published ports.
+    volumes:
+      - ./workspace:/home/exec/workspace
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+          pids: 256
+    # per-command timeout enforced graph-side (task-02/task-07 policy)
+
+  manager:
+    image: docker:cli
+    networks: [mgmt-net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/shared
+      - ./manager-entrypoint.sh:/usr/local/bin/manager-entrypoint.sh
+    environment:
+      COMPOSE_PROJECT_NAME: "code-exec-sandbox"
+      MANAGER_ENTRYPOINT: "/usr/local/bin/manager-entrypoint.sh"
+    entrypoint: ["/usr/local/bin/manager-entrypoint.sh"]
