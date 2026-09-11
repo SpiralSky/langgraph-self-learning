@@ -9,6 +9,10 @@ def message_to_text(message: BaseMessage) -> str:
     extraction shared by ``retrieve_memory``, ``save_memory``, and
     ``response_builder``.
 
+    Block-list handling iterates each block: dicts with ``"type": "text"``
+    contribute their ``"text"`` value; objects with a ``.text`` attribute
+    contribute that attribute. Everything is joined with spaces.
+
     :param message: Conversation message to serialize.
     :type message: BaseMessage
     :return: The message text as a single string.

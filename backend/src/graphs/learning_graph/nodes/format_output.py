@@ -3,8 +3,12 @@ import re
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
+from graphs.learning_graph.compiler import get_node_prompt
 from graphs.learning_graph.llm import get_chat_model
+from graphs.learning_graph.nodes.node import node
 from graphs.learning_graph.state import LearningGraphState
+
+
 
 FORMAT_OUTPUT_SYSTEM_PROMPT = """You are a formatting expert. Improve the readability and visual appeal of the given response with markdown.
 
@@ -93,34 +97,41 @@ def normalize_widget_fences(markdown: str) -> str:
     return _WIDGET_DIV_RE.sub(_convert_widget_div, markdown)
 
 
+@node(prompt=FORMAT_OUTPUT_SYSTEM_PROMPT, intent="format")
 def format_output(state: LearningGraphState) -> dict[str, str]:
     """
-    Format the improved response into a presentable markdown string.
+    Format the draft response into a presentable markdown string.
 
     This is the ONLY node in the graph that may emit widget-fence markup
     (``:::code``, ``:::text``). Earlier nodes keep their output as plain
     markdown and leave widget concerns to here.
 
-    :param state: Current graph state, must have ``improved_response``
-        populated with a ``final_response`` to format.
+    Also normalizes any stray HTML ``<div data-widget="...">`` markup into
+    ``:::`` fences via :func:`normalize_widget_fences` as a safety net for
+    models that emit the HTML form instead of the fence form.
+
+    :param state: Current graph state, must have ``draft_response``
+        populated with a ``ResponseBuilderOutput`` to format.
     :type state: LearningGraphState
     :return: Mapping the state key ``"final_output"`` to the formatted markdown
         response string ready for the chat UI.
     :rtype: dict[str, str]
-    :raises ValueError: If ``state.improved_response`` is missing.
+    :raises ValueError: If ``state.draft_response`` is missing.
     """
-    if state.improved_response is None:
-        raise ValueError("Missing required field(s): improved_response")
-    improved_response = state.improved_response
+    if state.draft_response is None:
+        raise ValueError("Missing required field(s): draft_response")
+    draft = state.draft_response
 
     context = {
-        "response_to_format": improved_response.final_response,
-        "original_tone": improved_response.tone_applied,
-        "strategy_used": improved_response.strategy_used
+        "response_to_format": draft.draft_response,
+        "original_tone": draft.tone,
+        "strategy_used": "direct"
     }
 
+    system_prompt = get_node_prompt("format_output", default=FORMAT_OUTPUT_SYSTEM_PROMPT)
+
     messages = [
-        SystemMessage(content=FORMAT_OUTPUT_SYSTEM_PROMPT),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=json.dumps(context, indent=2, default=str))
     ]
 

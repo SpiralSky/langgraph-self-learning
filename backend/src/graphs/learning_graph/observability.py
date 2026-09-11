@@ -12,6 +12,12 @@ def timed(name: str):
     Logs node completion at INFO and a warning with the elapsed time on error
     before re-raising, so footprint regressions are visible in the logs.
 
+    Typical usage::
+
+        @timed("decision_maker")
+        def decision_maker(state: LearningGraphState) -> dict[str, Any]:
+            ...
+
     :param name: Node name to attach to the log lines.
     :type name: str
     :return: Decorator wrapping the node callable with timing.

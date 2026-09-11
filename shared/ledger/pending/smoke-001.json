@@ -1,0 +1,5 @@
+{
+  "request_id": "smoke-001",
+  "packages": ["curl"],
+  "reason": "user asked for curl"
+}

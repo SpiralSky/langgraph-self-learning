@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "",
+    "indexed_at": "2026-08-27T11:38:58Z",
+    "project": "workspace-backend",
+    "nodes": 438,
+    "edges": 1532,
+    "original_size": 2949120,
+    "compressed_size": 343866,
+    "compression_level": 9
+}

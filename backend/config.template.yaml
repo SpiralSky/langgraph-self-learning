@@ -1,14 +1,26 @@
-# Example YAML. Simply add providers and map them to models, basically.
+# Model provider configuration. Add providers and map them to models.
+# Reasoning capability is declared on the model, not per node:
+#   reasoning_levels  - accepted reasoning_effort values (native scale, e.g. ["low","medium","high"])
+#   reasoning_default - static effort applied to every request from this provider
+#   reasoning_defaults (top-level) - optional per-node override of reasoning_default
+# Non-reasoning models (e.g. embeddings) omit both fields.
+#
+#   memory_embedder mapping is currently outdated; kept for template reference.
+
 provider_data:
   openai_gpt4o_mini:
     api_endpoint: "https://api.openai.com/v1"
     api_key: "your-openai-api-key"
     model_id: "gpt-4o-mini"
+    reasoning_levels: ["low", "medium", "high"]
+    reasoning_default: "medium"
 
   openai_gpt4o:
     api_endpoint: "https://api.openai.com/v1"
     api_key: "your-openai-api-key"
     model_id: "gpt-4o"
+    reasoning_levels: ["low", "medium", "high"]
+    reasoning_default: "medium"
 
   openai_embedder:
     api_endpoint: "https://api.openai.com/v1"
@@ -25,10 +37,21 @@ provider_data:
     api_key: "ollama"
     model_id: "llama3.2:latest"
 
+# Per-node reasoning override (default). Declared overrides use this static
+# reasoning_effort instead of their provider's reasoning_default; unlisted
+# nodes fall back to the provider's reasoning_default.
+reasoning_defaults:
+  format_output: "low"
+  memory_llm: "low"
+  input_analyzer: "medium"
+  response_builder: "medium"
+  decision_maker: "high"
+
 model_providers:
   information_fetcher: "openai_gpt4o_mini"
   input_analyzer: "openai_gpt4o_mini"
+  decision_maker: "openai_gpt4o_mini"
   response_builder: "openai_gpt4o"
   response_improver: "openai_gpt4o"
-  memory_llm: "openai_gpt4o_mini"
+memory_llm: "openai_gpt4o_mini"
   memory_embedder: "openai_embedder"
