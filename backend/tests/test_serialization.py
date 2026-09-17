@@ -394,3 +394,91 @@ def test_collection_load_unknown_node_tag_raises(tmp_path):
     storage_mod.write_json(path, {"nodes": [{"type": "nope"}]})
     with pytest.raises(ValueError, match="unknown node type tag"):
         storage_mod.load_collection(path, embedder=DummyEmbedder())
+
+
+def test_collection_dump_load_preserves_stats(tmp_path):
+    from graphs.api.stats import OnlineStats
+
+    path = tmp_path / "collection.json"
+    coll = NodeCollection(embedder=DummyEmbedder())
+    node_id = coll.add(TextNode("alpha", "d1", "p1"))
+    tokens = OnlineStats()
+    for value in (10.0, 20.0):
+        tokens.update(value)
+    times = OnlineStats()
+    for value in (0.1, 0.3):
+        times.update(value)
+    coll.restore_stats(node_id, run_counts=5, tokens=tokens, time=times)
+    coll.add(TextNode("beta", "d2", "p2"))
+
+    storage_mod.dump_collection(coll, path)
+    restored = storage_mod.load_collection(path, embedder=DummyEmbedder())
+
+    recs = restored.records()
+    assert recs[0].run_counts == 5
+    assert recs[0].tokens_count == 2
+    assert recs[0].tokens_mean == pytest.approx(15.0)
+    assert recs[0].tokens_std == pytest.approx(7.0710678118654755)
+    assert recs[0].time_count == 2
+    assert recs[0].time_mean == pytest.approx(0.2)
+    assert recs[0].time_std == pytest.approx(0.14142135623730953)
+    assert recs[1].run_counts == 0
+    assert recs[1].tokens_count == 0
+    assert recs[1].time_count == 0
+
+
+def test_collection_dump_load_stats_welford_continuity(tmp_path):
+    from graphs.api.stats import OnlineStats
+
+    path = tmp_path / "collection.json"
+    coll = NodeCollection(embedder=DummyEmbedder())
+    node_id = coll.add(TextNode("alpha", "d1", "p1"))
+    tokens = OnlineStats()
+    for value in (10.0, 20.0):
+        tokens.update(value)
+    times = OnlineStats()
+    times.update(0.5)
+    coll.restore_stats(node_id, run_counts=2, tokens=tokens, time=times)
+
+    storage_mod.dump_collection(coll, path)
+    restored = storage_mod.load_collection(path, embedder=DummyEmbedder())
+    rid = restored.records()[0].id
+
+    restored.record_run(rid, tokens=30.0, elapsed_seconds=0.5)
+
+    rec = restored.records()[0]
+    assert rec.run_counts == 3
+    assert rec.tokens_count == 3
+    assert rec.tokens_mean == pytest.approx(20.0)
+    assert rec.time_count == 2
+    assert rec.time_mean == pytest.approx(0.5)
+
+
+def test_collection_load_legacy_format_defaults_empty_stats(tmp_path):
+    path = tmp_path / "collection.json"
+    node = TextNode("legacy", "d", "p")
+    storage_mod.write_json(path, {"nodes": [node.to_dict()]})
+
+    restored = storage_mod.load_collection(path, embedder=DummyEmbedder())
+
+    assert [r.name for r in restored.records()] == ["legacy"]
+    rec = restored.records()[0]
+    assert rec.run_counts == 0
+    assert rec.tokens_count == 0
+    assert rec.tokens_mean is None
+    assert rec.time_count == 0
+    assert rec.time_mean is None
+
+
+def test_collection_dump_stats_are_json_serializable(tmp_path):
+    path = tmp_path / "collection.json"
+    coll = NodeCollection(embedder=DummyEmbedder())
+    coll.add(TextNode("alpha", "d", "p"))
+    storage_mod.dump_collection(coll, path)
+
+    data = storage_mod.read_json(path)
+    entry = data["nodes"][0]
+    assert set(entry) == {"node", "stats"}
+    assert entry["stats"]["run_counts"] == 0
+    assert entry["stats"]["tokens"] == {"count": 0, "mean": None, "std": None}
+    assert entry["stats"]["time"] == {"count": 0, "mean": None, "std": None}

@@ -14,6 +14,8 @@ query and ranks by similarity. Persistence (vectors included) stays external.
 
 from __future__ import annotations
 
+import math
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -22,10 +24,133 @@ from uuid import uuid4
 
 import chromadb
 
+from graphs.api.stats import OnlineStats
 from graphs.nodes.base import GraphNode
+
+
+def _validate_measurement(value: object, *, name: str) -> float:
+    """Coerce a run measurement to a finite, non-negative float.
+
+    :raises ValueError: if ``value`` is not a number, is not finite, or is
+        negative (incl. NaN/±inf).
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite")
+    if number < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return number
 
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _default_embedding_model: object | None = None
+
+
+class _RecordingLLM:
+    """Thin ``Runnable`` proxy that times calls and reads output-token usage.
+
+    Wraps a real LLM and observes the calls node callables make through it
+    (including nested calls, e.g. a ``GraphNode`` threading the same llm to
+    inner nodes): every ``invoke``/``ainvoke`` adds its tokens and elapsed
+    time to per-run accumulators. It exposes ``invoke`` / ``ainvoke`` (the
+    only entry points node callables use) and transparently delegates any
+    other attribute access to the wrapped LLM via ``__getattr__``.
+
+    Tokens are read from ``result.usage_metadata["output_tokens"]`` when
+    present (and numeric); missing metadata yields no token accumulation
+    (time-only recording). ``reset_run`` clears the accumulators at the start
+    of a top-level run; ``take_run`` returns them and resets.
+    """
+
+    def __init__(self, llm: object) -> None:
+        self._llm = llm
+        self._total_tokens: int = 0
+        self._run_elapsed: float = 0.0
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._llm, name)
+
+    def reset_run(self) -> None:
+        """Clear the per-run accumulators (call once per top-level run)."""
+        self._total_tokens = 0
+        self._run_elapsed = 0.0
+
+    def take_run(self) -> tuple[int | None, float]:
+        """Return ``(tokens | None, elapsed_seconds)`` and reset.
+
+        ``None`` tokens signal that no ``usage_metadata`` was observed (so
+        the caller records time only).
+        """
+        tokens = self._total_tokens or None
+        elapsed = self._run_elapsed
+        self.reset_run()
+        return tokens, elapsed
+
+    def _observe(self, elapsed: float, result: object) -> None:
+        self._run_elapsed += elapsed
+        metadata = getattr(result, "usage_metadata", None)
+        if isinstance(metadata, dict):
+            output_tokens = metadata.get("output_tokens")
+            if isinstance(output_tokens, (int, float)) and not isinstance(
+                output_tokens, bool
+            ):
+                self._total_tokens += int(output_tokens)
+
+    def invoke(self, *args: object, **kwargs: object) -> object:
+        start = time.perf_counter()
+        try:
+            result = self._llm.invoke(*args, **kwargs)
+        except BaseException:
+            raise
+        self._observe(time.perf_counter() - start, result)
+        return result
+
+    async def ainvoke(self, *args: object, **kwargs: object) -> object:
+        start = time.perf_counter()
+        try:
+            result = await self._llm.ainvoke(*args, **kwargs)
+        except BaseException:
+            raise
+        self._observe(time.perf_counter() - start, result)
+        return result
+
+
+class _TelemetryCallable:
+    """DualCallable wrapper that records run telemetry on success.
+
+    Resets the recording proxy accumulator, runs the wrapped node callable,
+    then reports tokens + elapsed time to the collection via ``record_run``.
+    Exceptions propagate and record nothing.
+    """
+
+    def __init__(
+        self,
+        *,
+        recorder: _RecordingLLM,
+        inner: object,
+        record: Callable,
+    ) -> None:
+        self._recorder = recorder
+        self._inner = inner
+        self._record = record
+
+    def _record_run(self) -> None:
+        tokens, elapsed = self._recorder.take_run()
+        self._record(tokens=tokens, elapsed_seconds=elapsed)
+
+    def invoke(self, state: dict, *args: object, **kwargs: object) -> dict:
+        self._recorder.reset_run()
+        result = self._inner.invoke(state, *args, **kwargs)
+        self._record_run()
+        return result
+
+    async def ainvoke(self, state: dict, *args: object, **kwargs: object) -> dict:
+        self._recorder.reset_run()
+        result = await self._inner.ainvoke(state, *args, **kwargs)
+        self._record_run()
+        return result
 
 
 def get_default_embedder() -> Callable[[str], list[float]]:
@@ -57,6 +182,13 @@ class NodeCollectionRecord:
     pinned: bool
     created_at: datetime
     last_used_at: datetime | None
+    run_counts: int = 0
+    tokens_count: int = 0
+    tokens_mean: float | None = None
+    tokens_std: float | None = None
+    time_count: int = 0
+    time_mean: float | None = None
+    time_std: float | None = None
 
 
 @dataclass
@@ -70,6 +202,9 @@ class _Entry:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_used_at: datetime | None = None
     embedded: bool = False
+    run_counts: int = 0
+    output_tokens: OnlineStats = field(default_factory=OnlineStats)
+    output_time: OnlineStats = field(default_factory=OnlineStats)
 
 
 class NodeCollection:
@@ -168,6 +303,87 @@ class NodeCollection:
         entry.use_counts += 1
         entry.last_used_at = datetime.now(UTC)
         return deepcopy(entry.node)
+
+    def record_run(
+        self,
+        node_id: str,
+        *,
+        tokens: object | None = None,
+        elapsed_seconds: object | None = None,
+    ) -> None:
+        """Record one execution outcome on the entry's run stats.
+
+        Bumps ``run_counts``; each non-``None`` measurement is validated
+        (finite, non-negative coerceable number) and folded into the
+        corresponding Welford accumulator. ``get`` / ``records`` never touch
+        these — they track runs, not store reads.
+
+        :param tokens: Output token count produced by the run.
+        :type tokens: object | None
+        :param elapsed_seconds: Wall-clock duration of the run.
+        :type elapsed_seconds: object | None
+
+        :raises KeyError: if ``node_id`` is unknown.
+        :raises ValueError: for NaN/infinite/negative measurements.
+        """
+        entry = self._entries[node_id]
+        tokens_value = (
+            None if tokens is None else _validate_measurement(tokens, name="tokens")
+        )
+        elapsed_value = (
+            None
+            if elapsed_seconds is None
+            else _validate_measurement(elapsed_seconds, name="elapsed_seconds")
+        )
+        entry.run_counts += 1
+        if tokens_value is not None:
+            entry.output_tokens.update(tokens_value)
+        if elapsed_value is not None:
+            entry.output_time.update(elapsed_value)
+
+    def restore_stats(
+        self,
+        node_id: str,
+        *,
+        run_counts: int,
+        tokens: OnlineStats,
+        time: OnlineStats,
+    ) -> None:
+        """Idempotently overwrite the entry's run telemetry.
+
+        Used by loaders (e.g. ``load_collection``) to re-attach persisted
+        stats to a freshly rebuilt entry.
+
+        :raises KeyError: if ``node_id`` is unknown.
+        :raises ValueError: if ``run_counts`` is negative.
+        """
+        entry = self._entries[node_id]
+        if run_counts < 0:
+            raise ValueError("run_counts must be non-negative")
+        entry.run_counts = run_counts
+        entry.output_tokens = tokens
+        entry.output_time = time
+
+    def get_callable(self, node_id: str, llm: object) -> _TelemetryCallable:
+        """Return an instrumented ``DualCallable`` for a stored node.
+
+        Deep-copies the stored prototype, wraps ``llm`` in a recording proxy
+        that sums output tokens (from ``usage_metadata``) and elapsed time
+        across the whole run (including nested ``GraphNode`` calls), and
+        returns a callable that reports those to :meth:`record_run` on every
+        successful top-level run. ``use_counts`` is NOT bumped here — that is
+        reserved for :meth:`get`.
+
+        :raises KeyError: if ``node_id`` is unknown.
+        """
+        entry = self._entries[node_id]
+        node = deepcopy(entry.node)
+        recorder = _RecordingLLM(llm)
+        inner = node.get_node(recorder)
+        record = lambda tokens, elapsed_seconds: self.record_run(  # noqa: E731
+            node_id, tokens=tokens, elapsed_seconds=elapsed_seconds
+        )
+        return _TelemetryCallable(recorder=recorder, inner=inner, record=record)
 
     def update(
         self,
@@ -410,6 +626,13 @@ class NodeCollection:
             pinned=entry.pinned,
             created_at=entry.created_at,
             last_used_at=entry.last_used_at,
+            run_counts=entry.run_counts,
+            tokens_count=entry.output_tokens.count,
+            tokens_mean=entry.output_tokens.mean if entry.output_tokens.count else None,
+            tokens_std=entry.output_tokens.std,
+            time_count=entry.output_time.count,
+            time_mean=entry.output_time.mean if entry.output_time.count else None,
+            time_std=entry.output_time.std,
         )
 
     def _prune(self) -> None:

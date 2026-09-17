@@ -3,9 +3,10 @@
 Storage helpers write atomic JSON (temp file + rename) and expose
 ``dump_collection`` / ``load_collection`` for round-tripping a whole
 ``NodeCollection`` through the type-tagged serializers. Persisted collections
-are *fresh*: per-entry bookkeeping (ids, ``pinned``, timestamps, use counts)
-is deliberately not stored — restore rebuilds prototypes with the external
-system's default configuration.
+store each node's output-token/time summary (count/mean/std) and ``run_counts``
+inline per node. Per-entry bookkeeping that cannot be restored (ids,
+``pinned``, timestamps, use counts) is still deliberately not stored — restore
+rebuilds prototypes with the external system's default configuration.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from config import BACKEND_ROOT
 from graphs.api.collection import NodeCollection
+from graphs.api.stats import OnlineStats
 from graphs.serialization import node_from_dict
 
 DATA_ROOT = BACKEND_ROOT / "data"
@@ -61,13 +63,30 @@ def dump_collection(collection: NodeCollection, path: str | Path = COLLECTION_PA
     :type path: str | Path
     """
     nodes: list[dict] = []
-    for node in collection.snapshot():
+    for node, rec in zip(collection.snapshot(), collection.records()):
         to_dict = getattr(node, "to_dict", None)
         if to_dict is None:
             raise ValueError(
                 f"collection contains a node without to_dict(): {node.name!r}"
             )
-        nodes.append(to_dict())
+        nodes.append(
+            {
+                "node": to_dict(),
+                "stats": {
+                    "run_counts": rec.run_counts,
+                    "tokens": {
+                        "count": rec.tokens_count,
+                        "mean": rec.tokens_mean,
+                        "std": rec.tokens_std,
+                    },
+                    "time": {
+                        "count": rec.time_count,
+                        "mean": rec.time_mean,
+                        "std": rec.time_std,
+                    },
+                },
+            }
+        )
     write_json(path, {"nodes": nodes})
 
 
@@ -92,6 +111,15 @@ def load_collection(
         data = read_json(path)
     except FileNotFoundError:
         return collection
-    for node_data in data["nodes"]:
-        collection.add(node_from_dict(node_data))
+    for item in data["nodes"]:
+        node_data = item["node"] if isinstance(item, dict) and "node" in item else item
+        node_id = collection.add(node_from_dict(node_data))
+        stats = item.get("stats") if isinstance(item, dict) else None
+        if stats:
+            collection.restore_stats(
+                node_id,
+                run_counts=stats["run_counts"],
+                tokens=OnlineStats.from_dict(stats["tokens"]),
+                time=OnlineStats.from_dict(stats["time"]),
+            )
     return collection
