@@ -10,9 +10,6 @@ Note: Prompt results may vary.
 
 ---
 
-### Configuration
-Currently, config.yaml is used for configuration. By default, a template is given (config.template.yaml). Simply rename it to config.yaml and fill in the values.
-
 ### Running
 To run the backend, simply do:
 ```commandline
