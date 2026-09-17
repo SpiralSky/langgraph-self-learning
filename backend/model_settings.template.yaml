@@ -1,0 +1,84 @@
+# ===========================================================================
+# MODEL & PROVIDER SETTINGS — TEMPLATE
+# ===========================================================================
+# Copy this file to `model_settings.yaml` (which is git-ignored) and fill in
+# your real values. `model_settings.yaml` is the only file read at runtime;
+# this template exists purely as documentation of the expected syntax.
+#
+# Both top-level keys are dictionaries:
+#   providers:  named provider connections (each holds credentials + defaults)
+#   models:     named logical models you reference from code (thin overrides)
+#
+# Values of the form ${ENV_VAR} are resolved at load time from the process
+# environment and from the `.env` file in this directory. Use that syntax so
+# secrets never live in this file.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# providers
+# ---------------------------------------------------------------------------
+# A dictionary of NAMED providers. The name (key) is arbitrary — you pick it
+# and use it everywhere else (a provider must define a model directly, or be
+# referenced by a model in the `models` dictionary below).
+#
+# Each provider accepts:
+#   api_type       Required. Which client implementation to use. Because not
+#                  every API is OpenAI-compatible, values beyond "openai" are
+#                  used to pick the correct SDK/client. Supported values:
+#                    - openai              OpenAI + any OpenAI-compatible API
+#                                          (this is the widest net: most
+#                                          endpoints expose /v1/chat/completions)
+#                    - anthropic           Anthropic / Claude Messages API
+#                    - google              Google Gemini API
+#                    - azure_openai        Azure-hosted OpenAI
+#                    - deepseek            DeepSeek (usually OpenAI-compatible,
+#                                          so "openai" often works too)
+#                    - custom              Anything else, drives off `base_url`
+#   base_url       Optional. Overrides the SDK default endpoint. Useful for
+#                  self-hosted / proxy / non-OpenAI gateways (e.g. Ollama,
+#                  vLLM, LiteLLM). Some api_type values ignore this.
+#   api_key        Required unless the provider is local/unauth'd. Use the
+#                  ${ENV_VAR} form to read from the environment / `.env`:
+#                    api_key: ${OPENAI_API_KEY}
+#                  A literal string also works, but is not recommended.
+#   default_model  Required. Model id used when a reference does not pin one
+#                  via the `models` dictionary. Passed to the client as-is,
+#                  so use the exact id the provider expects, e.g.:
+#                    - gpt-4o-mini
+#                    - claude-3-5-sonnet-latest
+#                    - gemini-2.0-flash
+# ---------------------------------------------------------------------------
+providers:
+  openai:
+    api_type: openai
+    api_key: ${OPENAI_API_KEY}
+    default_model: gpt-4o-mini
+
+# ---------------------------------------------------------------------------
+# models
+# ---------------------------------------------------------------------------
+# A dictionary of NAMED models — the logical names your code/uploads refer to.
+# The name (key) is arbitrary; each entry binds a label to a concrete provider,
+# and OPTIONALLY overrides the provider's default model and thinking level.
+#
+# Each model accepts:
+#   provider       Required. Name of a provider key from `providers` above.
+#   model          Optional. Overrides that provider's `default_model`. When
+#                  omitted, the provider's default_model is used.
+#   thinking_level Optional. The specific thinking / reasoning level offered by
+#                  the provider. This is deliberately a free string because the
+#                  vocabulary differs per provider and model. Examples:
+#                    - openai o-series:    low | medium | high
+#                    - anthropic:          minimal | low | medium | high
+#                    - deepseek-reasoner:  off | low | medium | high
+#                  Leave unset (or omit) when the model has no such knob.
+# ---------------------------------------------------------------------------
+models:
+  fast:
+    provider: openai
+    model: gpt-4o-mini
+
+  # Example of a model that reuses the provider default but pins a thinking level:
+  # reasoner:
+  #   provider: openai
+  #   thinking_level: high

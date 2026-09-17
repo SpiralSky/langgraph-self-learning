@@ -20,9 +20,11 @@ See ``docs/`` for developer/operator documentation:
 
 | Doc | Covers |
 |-----|--------|
-| ``docs/architecture.md`` | System overview, graph flow, state keys, config files, node registry |
-| ``docs/state-and-models.md`` | LearningGraphState fields, all 10 pydantic models |
-| ``docs/config-and-compiler.md`` | Config system, prompt compiler, LLM init, memory setup |
-| ``docs/nodes.md`` | All 9 nodes: purpose, inputs, outputs, key logic |
-| ``docs/infrastructure.md`` | Observability, text_utils, session_types, execute_code infra |
-| ``docs/tests-and-eval.md`` | Test structure, fixtures, conventions, eval setup |u
+| ``docs/prompt-node.md`` | `with_prompt` factory: bind a prompt to a LangGraph node callable |
+| ``docs/nodes.md`` | Node system: ``AbstractNode``/``GraphNode`` + ``TextNode`` — metadata, by-name ``params``/``writes``, prompt templating, pydantic state, plain-value writes |
+| ``docs/node-collection.md`` | ``NodeCollection``: in-memory prototype store — uuid ids, usage-tracked retrieval, update/replace mutation, metadata + semantic search, pruning, records/snapshot views |
+| ``docs/graphs.md`` | ``Graph``: editable graph structure — manual-id nodes/edges, connections, validation, render, compile, ``GraphNode`` nesting |
+| ``docs/tools.md`` | ``ToolCallNode`` + whitelist ``ToolRegistry`` — local mem0 memory + ddgs search tools, args validation, build-time whitelist |
+| ``docs/behaviors.md`` | Behaviors: sectioned ``backend/behaviors.yaml`` data, stable point keys, rendering into the fixed generator template |
+| ``docs/generator.md`` | ``GeneratorNode``: single-pass ``add_node``/``add_edge`` graph generation, validate + retry, nested in-turn execution, reuse auto-save |
+| ``docs/data.md`` | Persistence: explicit JSON serializers, atomic storage helpers, ``backend/data/`` layout |

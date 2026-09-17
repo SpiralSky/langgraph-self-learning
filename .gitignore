@@ -1,6 +1,6 @@
 .env
 *.ipynb
-config.yaml
+model_settings.yaml
 
 __pycache__/
 *.pyc
