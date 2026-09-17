@@ -31,6 +31,11 @@ Frozen, read-only metadata view of a stored node.
 | `pinned` | `bool` | protected from auto-pruning |
 | `created_at` | `datetime` | tz-aware UTC insertion time |
 | `last_used_at` | `datetime \| None` | tz-aware UTC time of last `get(id)` |
+| `run_counts` | `int` | bumped only by `record_run(id)` — execution outcomes, distinct from store reads |
+| `tokens_count` | `int` | number of runs that reported an output-token count (subset of `run_counts`) |
+| `tokens_mean` / `tokens_std` | `float \| None` | output-token mean/std over those runs (`None` while `tokens_count` is 0) |
+| `time_count` | `int` | number of runs that reported elapsed time (subset of `run_counts`) |
+| `time_mean` / `time_std` | `float \| None` | elapsed-time mean/std over those runs (`None` while `time_count` is 0) |
 
 ## API
 
@@ -42,6 +47,9 @@ Validates `0 < prune_to <= max_nodes` (`ValueError`).
 |--------|----------------------|
 | `add(node, *, pinned=False) -> str` | Store a prototype, return its new uuid4 id; rejects an empty/missing `node.name`; auto-prunes on overflow; embeds the node (embedder failure degrades gracefully — node stays stored, marked unembedded) |
 | `get(id) -> GraphNode` | Return a **deep copy** of the prototype, bumping `use_counts` + `last_used_at`; `KeyError` if unknown — the stored prototype is read-only from outside; mutate via `update`/`replace` |
+| `record_run(id, *, tokens=None, elapsed_seconds=None) -> None` | Record one execution outcome on the entry's run stats: bump `run_counts`, fold each non-`None` measurement (must be finite and non-negative) into the Welford accumulators; `KeyError` if unknown, `ValueError` on NaN/±inf/negative |
+| `restore_stats(id, *, run_counts, tokens, time) -> None` | Idempotently overwrite the entry's run telemetry with `OnlineStats` values; used by loaders (e.g. `load_collection`) to re-attach persisted stats; `KeyError` if unknown, `ValueError` for negative `run_counts` |
+| `get_callable(id, llm) -> DualCallable` | Deep-copy the stored prototype, wrap `llm` in a recording proxy that sums output tokens (`usage_metadata`) and elapsed time across the run, and return an instrumented callable that reports them via `record_run` on every **successful** top-level run; bumps nothing itself; `KeyError` if unknown |
 | `update(id, *, name=None, description=None, prompt=None, params=None, writes=None) -> None` | Field-level edit keyed by id; preserves all bookkeeping, never bumps; rebuilds via the stored node's `updated()` (re-validates placeholders ⊆ params); empty call is a no-op; `KeyError` if unknown; `TypeError` if the stored node has no `updated()` (use `replace`) |
 | `replace(id, new_node) -> None` | Swap in a rebuilt prototype under the same id; preserves bookkeeping, never bumps; `ValueError` on empty name |
 | `get_by_name(name) -> list[NodeCollectionRecord]` | All records with that name, insertion order; never bumps |
@@ -126,6 +134,19 @@ coll = NodeCollection(embedder=fake_embed)
 - **Usage tracking** — `use_counts`/`last_used_at` bump **only** on
   `get(id)`. Searches, listings, `get_by_name`, `update` and `replace` never
   mutate usage.
+- **Run telemetry** — `use_counts` measures store reads; `run_counts` and the
+  token/time stats measure **executions**, and are bumped **only** by
+  `record_run(id, …)` (via `get_callable`, or directly). `get_callable`
+  deep-copies the prototype, wraps the supplied `llm` in a recording proxy
+  that accumulates `usage_metadata["output_tokens"]` and call wall-time across
+  the whole run — including nested `GraphNode` calls that thread the same llm
+  — and records on **success only**: an exception propagates and records
+  nothing. A run whose LLM responses carry no `usage_metadata` records time
+  only (tokens skipped, no heuristic). `get_callable` itself bumps nothing.
+  Per-node stats are folded in online (Welford) and stay on the store entry,
+  so they are **preserved across `update`/`replace`**, come from **`records()`/
+  `search`/etc.** as fields on the record, and are **persisted inline** in
+  `collection.json` — legacy dumps load with empty stats (see `docs/data.md`).
 - **Mutations don't bump** — `update`/`replace` rebuild the stored prototype
   under the same id and leave `use_counts`, `pinned`, `created_at` and
   `last_used_at` untouched. Only `get` records use/recency.
@@ -153,13 +174,17 @@ coll = NodeCollection(embedder=fake_embed)
 
 ## Tests
 
-See `tests/test_node_collection.py` (51 tests): construction validation,
+See `tests/test_node_collection.py` (73 tests): construction validation,
 add/get/remove lifecycle, usage bumps, insertion order, combined-filter
 metadata search, pruning + pinning, deep-copy snapshots, the vector index
 (add/remove/prune vector lifecycle, cosine ranking, `within_newest`,
-sort-by variants, degradation paths), and field-level mutation
+sort-by variants, degradation paths), field-level mutation
 (`update`/`replace`: bookkeeping preservation, no-bump guarantee, re-embed on
 text change, unembedded re-attempt, validation/error paths, copy-returning
-`get`). The suite is pure-unit — it never touches the network; tests inject a
+`get`), and run telemetry (`record_run`/`restore_stats` measurement
+validation + Welford folding, `get_callable` recording via the `llm` proxy —
+token and time accumulation through nested runs, time-only on missing
+`usage_metadata`, no bump, success-only recording on `invoke`/`ainvoke`).
+The suite is pure-unit — it never touches the network; tests inject a
 deterministic fake embedder, and the default fastembed embedder is verified
 to stay unconstructed.

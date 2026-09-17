@@ -20,11 +20,14 @@ Two design points matter:
   to the owning module's `from_dict`, so nested payloads rebuild without the
   caller knowing the concrete class. Registration is lazy: modules
   self-register on import.
-- **Persisted collections are *fresh*** — per-entry bookkeeping (ids, `pinned`,
-  timestamps, use counts) is deliberately **not** stored. `load_collection`
-  restores prototypes and re-embeds them on `add` with the supplied (or
-  default) embedder; an embedding failure degrades to `embedded=False` exactly
-  like a normal `add`.
+- **Per-node run stats are persisted; other bookkeeping is not** — each node
+  carries inline `{"node": …, "stats": …}`, where `stats` holds `run_counts`
+  plus the output-token and elapsed-time summaries (count/mean/std). The
+  per-entry bookkeeping that cannot be rebuilt — ids, `pinned`, timestamps,
+  use counts — is deliberately **not** stored. `load_collection` restores
+  prototypes and re-embeds them on `add` with the supplied (or default)
+  embedder; an embedding failure degrades to `embedded=False` exactly like a
+  normal `add`.
 
 ## API
 
@@ -69,11 +72,14 @@ load_collection(path=COLLECTION_PATH, embedder=None) -> NodeCollection
 
 - `write_json` writes a `*.tmp` sibling first, then `os.replace` — a failed
   write never corrupts an existing file; parent dirs are created on demand.
-- `dump_collection` persists each serializable prototype as a type-tagged dict
-  under `{"nodes": [...]}`; a node without `to_dict` raises `ValueError`
-  naming it.
+- `dump_collection` persists each serializable prototype as an inline entry —
+  `{"node": <type-tagged dict>, "stats": {…}}` under `{"nodes": [...]}` — where
+  `stats` carries `run_counts` and the token/time (count/mean/std) summaries. A
+  node without `to_dict` raises `ValueError` naming it.
 - `load_collection` restores the file (missing file → empty collection),
-  rebuilding every node through `node_from_dict`.
+  rebuilding every node through `node_from_dict` and re-applying each entry's
+  `stats` via `restore_stats`. Legacy `{"nodes": [<node dict>]}` dumps (no
+  `stats`) still load, with stats defaulting to empty.
 
 ## Layout
 
@@ -87,18 +93,25 @@ load_collection(path=COLLECTION_PATH, embedder=None) -> NodeCollection
 {
   "nodes": [
     {
-      "type": "graph",
-      "name": "gen",
-      "description": "...",
-      "prompt": "Reusable graph generated at runtime from the request.",
-      "graph": {
+      "node": {
         "type": "graph",
-        "state_model": {"kind": "dynamic", "fields": {"user_message": "str"}},
-        "nodes": {"a": {"type": "text", "name": "first", "prompt": "Start {user_message}", "params": {"user_message": "str"}, "writes": {"result": "notes"}}},
-        "edges": {"e1": {"type": "standard", "source": "START", "target": "a"}}
+        "name": "gen",
+        "description": "...",
+        "prompt": "Reusable graph generated at runtime from the request.",
+        "graph": {
+          "type": "graph",
+          "state_model": {"kind": "dynamic", "fields": {"user_message": "str"}},
+          "nodes": {"a": {"type": "text", "name": "first", "prompt": "Start {user_message}", "params": {"user_message": "str"}, "writes": {"result": "notes"}}},
+          "edges": {"e1": {"type": "standard", "source": "START", "target": "a"}}
+        },
+        "input_map": {"user_message": "user_message"},
+        "output_map": {"response": "response"}
       },
-      "input_map": {"user_message": "user_message"},
-      "output_map": {"response": "response"}
+      "stats": {
+        "run_counts": 3,
+        "tokens": {"count": 2, "mean": 15.0, "std": 2.0},
+        "time": {"count": 3, "mean": 0.0012, "std": 0.0003}
+      }
     }
   ]
 }
@@ -117,9 +130,10 @@ load_collection(path=COLLECTION_PATH, embedder=None) -> NodeCollection
 
 ## Tests
 
-- `tests/test_serialization.py` (24 tests) — annotation registry,
+- `tests/test_serialization.py` (28 tests) — annotation registry,
   type-tagged node round-trips, connections, dynamic/static `Graph`
-  serialization, storage helpers.
+  serialization, storage helpers (incl. inline per-node `stats` dump/load
+  round-trip and legacy-format back-compat).
 
 The suite is pure-unit — run from `backend/`:
 `.venv/bin/python -m pytest tests/ -q`.
