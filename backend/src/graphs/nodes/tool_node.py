@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from graphs.nodes.base import AbstractNode, DualCallable
 from graphs.nodes.text_node import is_list_annotation
-from graphs.serialization import register_node_type
+from graphs.persistence.serialization import register_node_type
 from graphs.tools import ToolRegistry, default_registry
 
 _PROMPT_TEMPLATE = (

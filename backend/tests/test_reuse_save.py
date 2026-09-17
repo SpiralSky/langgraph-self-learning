@@ -12,12 +12,12 @@ construction, no real tools.
 from langchain_core.messages import AIMessage
 
 from graphs.api.collection import NodeCollection
-from graphs.generator import GeneratorNode, save_reused, wrap_reused
+from graphs.nodes.generator import GeneratorNode, save_reused, wrap_reused
 from graphs.nodes.graph_node import GraphNode
 from graphs.nodes.text_node import TextNode
 from graphs.nodes.tool_node import ToolCallNode
-from graphs.serialization import node_from_dict
-from graphs.storage import load_collection
+from graphs.persistence.serialization import node_from_dict
+from graphs.persistence.storage import load_collection
 from graphs.tools import ToolRegistry
 
 

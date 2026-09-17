@@ -11,19 +11,19 @@ import pytest
 from pydantic import create_model
 
 import graphs.api.collection as collection_mod
-import graphs.storage as storage_mod
+import graphs.persistence.storage as storage_mod
 from graphs.api.collection import NodeCollection
-from graphs.connections import Connection, RoutingConnection
-from graphs.graph import END, START, Graph
+from graphs.structure.connections import Connection, RoutingConnection
+from graphs.structure.graph import END, START, Graph
 from graphs.nodes.graph_node import GraphNode
 from graphs.nodes.text_node import TextNode
-from graphs.serialization import (
+from graphs.persistence.serialization import (
     connection_from_dict,
     deserialize_annotation,
     node_from_dict,
     serialize_annotation,
 )
-from graphs.state import LearningGraphState
+from graphs.structure.state import LearningGraphState
 
 
 class RaisingDefaultEmbedder:

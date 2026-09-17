@@ -19,10 +19,10 @@ from fastapi import FastAPI, HTTPException
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
-from graphs.behaviors import load_behaviors
-from graphs.feedback import compute_improvement_patches
-from graphs.llm import get_chat_model
-from graphs.patches import append_patches, apply_patches, load_patches
+from graphs.learning.behaviors import load_behaviors
+from graphs.learning.feedback import compute_improvement_patches
+from graphs.runtime.llm import get_chat_model
+from graphs.learning.patches import append_patches, apply_patches, load_patches
 
 
 class FeedbackRequest(BaseModel):

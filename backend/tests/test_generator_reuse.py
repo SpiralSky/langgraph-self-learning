@@ -14,9 +14,9 @@ import json
 from langchain_core.messages import AIMessage
 
 from graphs.api.collection import NodeCollection
-from graphs.generator import GeneratorNode
+from graphs.nodes.generator import GeneratorNode
 from graphs.nodes.text_node import TextNode
-from graphs.storage import dump_collection, load_collection
+from graphs.persistence.storage import dump_collection, load_collection
 from graphs.tools import ToolRegistry
 
 
@@ -318,7 +318,7 @@ def test_reuse_collection_restored_from_disk(tmp_path, monkeypatch):
     source.add(_catalog_node())
     dump_collection(source, path)
 
-    import graphs.generator as gen_mod
+    import graphs.nodes.generator as gen_mod
 
     seen = []
     monkeypatch.setattr(
@@ -338,7 +338,7 @@ def test_restored_collection_nodes_feed_retrieve(tmp_path, monkeypatch):
     nid = source.add(_catalog_node())
     dump_collection(source, path)
 
-    import graphs.generator as gen_mod
+    import graphs.nodes.generator as gen_mod
 
     monkeypatch.setattr(gen_mod, "load_collection", lambda p, **kw: source)
     llm = GenLLM(build=[calls_message(*pull_calls(nid))], retrieve=[retrieve_message([nid])])

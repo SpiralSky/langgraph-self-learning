@@ -17,7 +17,7 @@ import types
 from collections.abc import Callable
 from typing import Annotated, Union, get_args, get_origin
 
-from graphs.connections import Connection, RoutingConnection
+from graphs.structure.connections import Connection, RoutingConnection
 
 ANNOTATION_NAMES: dict[type, str] = {
     str: "str",

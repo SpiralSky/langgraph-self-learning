@@ -21,7 +21,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, TypeAdapter
 
 from graphs.nodes.base import AbstractNode, DualCallable
-from graphs.serialization import (
+from graphs.persistence.serialization import (
     deserialize_annotation,
     register_node_type,
     serialize_annotation,

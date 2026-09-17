@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from graphs.behaviors import BehaviorGroup, BehaviorPoint, load_behaviors
-from graphs.feedback import Patch
+from graphs.learning.behaviors import BehaviorGroup, BehaviorPoint, load_behaviors
+from graphs.learning.feedback import Patch
 from graphs.nodes.text_node import TextNode
-from graphs.patches import (
+from graphs.learning.patches import (
     append_patches,
     apply_patches,
     load_patches,

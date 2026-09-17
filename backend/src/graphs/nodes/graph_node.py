@@ -19,12 +19,12 @@ from typing import TYPE_CHECKING, Self
 from pydantic import BaseModel, TypeAdapter
 
 from graphs.nodes.base import AbstractNode, DualCallable
-from graphs.serialization import register_node_type
+from graphs.persistence.serialization import register_node_type
 
 if TYPE_CHECKING:
     from langchain_core.runnables import Runnable
 
-    from graphs.graph import Graph
+    from graphs.structure.graph import Graph
 
 
 class _GraphNodeFn:
@@ -243,7 +243,7 @@ class GraphNode(AbstractNode):
         The inner ``Graph`` is imported lazily to keep module-level coupling
         loose (mirroring the ``TYPE_CHECKING`` convention above).
         """
-        from graphs.graph import Graph
+        from graphs.structure.graph import Graph
 
         return cls(
             name=data["name"],

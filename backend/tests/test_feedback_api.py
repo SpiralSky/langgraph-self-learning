@@ -12,9 +12,9 @@ from fastapi.testclient import TestClient
 
 from api import feedback as api_feedback
 from api.feedback import create_app
-from graphs.behaviors import BehaviorGroup, BehaviorPoint
-from graphs.feedback import Patch
-from graphs.patches import save_behaviors
+from graphs.learning.behaviors import BehaviorGroup, BehaviorPoint
+from graphs.learning.feedback import Patch
+from graphs.learning.patches import save_behaviors
 
 
 def group(title: str, *points: tuple[str, str]) -> BehaviorGroup:

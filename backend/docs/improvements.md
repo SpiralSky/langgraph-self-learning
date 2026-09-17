@@ -1,7 +1,7 @@
 # Improvements
 
-Source: `src/graphs/feedback.py` (`Patch`, `parse_regenerated`,
-`diff_behaviors`, `compute_improvement_patches`), `src/graphs/patches.py`
+Source: `src/graphs/learning/feedback.py` (`Patch`, `parse_regenerated`,
+`diff_behaviors`, `compute_improvement_patches`), `src/graphs/learning/patches.py`
 (`save_behaviors`, `load_patches`, `append_patches`, `apply_patches`),
 `src/api/feedback.py` (`create_app`, `FeedbackRequest`)
 
@@ -80,7 +80,7 @@ Patch(seq=3, action="update", title="Answer directly",
 Duplicate `(title, point_key)` in the regenerated set, or a bad `seq_prefix`,
 raise `ValueError`.
 
-## Storage & application (`patches.py`)
+## Storage & application (`learning/patches.py`)
 
 - **`PATCHES_PATH`** = `backend/data/patches.jsonl`, one patch JSON object per
   line, written atomically (temp sibling + `os.replace`).

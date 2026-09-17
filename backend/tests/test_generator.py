@@ -11,14 +11,14 @@ import yaml
 from langchain_core.messages import AIMessage
 
 from graphs.api.collection import NodeCollection
-from graphs.behaviors import BehaviorGroup, BehaviorPoint
-from graphs.generator import (
+from graphs.learning.behaviors import BehaviorGroup, BehaviorPoint
+from graphs.nodes.generator import (
     BUILDER_TOOL_DEFS,
     GeneratorNode,
     build_state_model,
     decode_builder_calls,
 )
-from graphs.graph import Graph
+from graphs.structure.graph import Graph
 from graphs.nodes.text_node import TextNode
 from graphs.nodes.tool_node import ToolCallNode
 from graphs.tools import ToolRegistry

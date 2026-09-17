@@ -8,8 +8,8 @@ wire them up.
 import pytest
 from pydantic import BaseModel
 
-from graphs.connections import Connection, RoutingConnection
-from graphs.graph import (
+from graphs.structure.connections import Connection, RoutingConnection
+from graphs.structure.graph import (
     END,
     START,
     Graph,
@@ -17,7 +17,7 @@ from graphs.graph import (
     NodeView,
 )
 from graphs.nodes.base import AbstractNode
-from graphs.state import LearningGraphState
+from graphs.structure.state import LearningGraphState
 
 
 class _MinNode(AbstractNode):

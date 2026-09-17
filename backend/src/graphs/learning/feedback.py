@@ -22,7 +22,7 @@ from typing import Literal
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
-from graphs.behaviors import BehaviorGroup
+from graphs.learning.behaviors import BehaviorGroup
 
 _FEEDBACK_TEMPLATE = """A learner suggested an improvement to the behavior rules.
 Rewrite the FULL behavior registry based on the suggestion: keep the rules that

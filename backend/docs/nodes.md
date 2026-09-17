@@ -1,6 +1,6 @@
 # Node System
 
-Source: `src/graphs/state.py` (`LearningGraphState`), `src/graphs/nodes/base.py`
+Source: `src/graphs/structure/state.py` (`LearningGraphState`), `src/graphs/nodes/base.py`
 (`AbstractNode` ABC + `GraphNode` protocol), `src/graphs/nodes/text_node.py`
 (`TextNode`)
 
