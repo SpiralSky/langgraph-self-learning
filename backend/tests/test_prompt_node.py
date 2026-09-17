@@ -5,7 +5,7 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import START, StateGraph
 
-from graphs.prompt_node import with_prompt
+from graphs.nodes.prompt_node import with_prompt
 
 
 def test_prompt_bound_as_first_arg():

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from graphs.behaviors import BehaviorGroup, BehaviorPoint
-from graphs.feedback import (
+from graphs.learning.behaviors import BehaviorGroup, BehaviorPoint
+from graphs.learning.feedback import (
     Patch,
     RegeneratedGroup,
     RegeneratedPoint,

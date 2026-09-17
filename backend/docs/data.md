@@ -1,8 +1,8 @@
 # Persistence & Data
 
-Source: `src/graphs/serialization.py` (`serialize_annotation`,
+Source: `src/graphs/persistence/serialization.py` (`serialize_annotation`,
 `deserialize_annotation`, `node_from_dict`, `connection_from_dict`),
-`src/graphs/storage.py` (`ensure_data_dir`, `read_json`, `write_json`,
+`src/graphs/persistence/storage.py` (`ensure_data_dir`, `read_json`, `write_json`,
 `dump_collection`, `load_collection`)
 
 ## What it is
@@ -31,7 +31,7 @@ Two design points matter:
 
 ## API
 
-### Annotations (`serialization.py`)
+### Annotations (`persistence/serialization.py`)
 
 ```python
 serialize_annotation(str)            # -> "str"
@@ -60,7 +60,7 @@ dynamic (generated) inner state model is encoded as `{"kind": "dynamic",
 "fields": {name: annotation-name}}` and rebuilt via pydantic `create_model`.
 Unknown fields/annotations raise rather than silently round-trip garbage.
 
-### Storage (`storage.py`)
+### Storage (`persistence/storage.py`)
 
 ```python
 ensure_data_dir() -> Path          # idempotently create backend/data/

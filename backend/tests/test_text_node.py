@@ -11,7 +11,7 @@ from langgraph.graph import START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
 from graphs.nodes.text_node import TextNode
-from graphs.state import LearningGraphState
+from graphs.structure.state import LearningGraphState
 
 
 class FakeLLM:

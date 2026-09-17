@@ -9,7 +9,7 @@ a parent graph, lazy inner validation, and constructor checks.
 import pytest
 from pydantic import BaseModel
 
-from graphs.graph import END, START, Graph, GraphValidationError
+from graphs.structure.graph import END, START, Graph, GraphValidationError
 from graphs.nodes.graph_node import GraphNode
 from graphs.nodes.text_node import TextNode
 

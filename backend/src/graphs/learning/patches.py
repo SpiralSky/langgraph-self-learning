@@ -23,15 +23,15 @@ from pathlib import Path
 
 import yaml
 
-from graphs.behaviors import (
+from graphs.learning.behaviors import (
     DEFAULT_BEHAVIORS_PATH,
     BehaviorGroup,
     BehaviorPoint,
     load_behaviors,
 )
-from graphs.feedback import Patch
-from graphs.serialization import node_from_dict
-from graphs.storage import DATA_ROOT, ensure_data_dir
+from graphs.learning.feedback import Patch
+from graphs.persistence.serialization import node_from_dict
+from graphs.persistence.storage import DATA_ROOT, ensure_data_dir
 
 PATCHES_PATH = DATA_ROOT / "patches.jsonl"
 

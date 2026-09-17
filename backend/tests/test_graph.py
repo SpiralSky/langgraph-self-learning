@@ -3,9 +3,9 @@
 built, validated, and — once ``compile()`` lands — executed.
 """
 
-from graphs.graph import END, START, Graph
+from graphs.structure.graph import END, START, Graph
 from graphs.nodes.text_node import TextNode
-from graphs.state import LearningGraphState
+from graphs.structure.state import LearningGraphState
 
 
 def test_graph_constructs_with_default_state_model():

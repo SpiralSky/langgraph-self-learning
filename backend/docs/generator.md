@@ -1,6 +1,6 @@
 # Generator Node
 
-Source: `src/graphs/generator.py` (`GeneratorNode`, `decode_builder_calls`,
+Source: `src/graphs/nodes/generator.py` (`GeneratorNode`, `decode_builder_calls`,
 `build_state_model`, `wrap_reused`, `save_reused`)
 
 ## What it is

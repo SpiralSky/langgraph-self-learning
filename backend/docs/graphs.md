@@ -1,7 +1,7 @@
 # Graph Structure
 
-Source: `src/graphs/graph.py` (`Graph`, `NodeView`, `GraphValidationError`,
-`START`/`END`), `src/graphs/connections.py` (`Connection`,
+Source: `src/graphs/structure/graph.py` (`Graph`, `NodeView`, `GraphValidationError`,
+`START`/`END`), `src/graphs/structure/connections.py` (`Connection`,
 `RoutingConnection`), `src/graphs/nodes/graph_node.py` (`GraphNode`)
 
 ## What it is
@@ -48,7 +48,7 @@ Every graph takes an explicit `state_model`; custom schemas are intended
 | `get_node(id)` / `get_edge(id)` / `get_node_llm(id)` | Direct access (`KeyError` if missing) — `get_node` returns a **deep copy** of the stored node |
 | `__len__` / `__contains__` | `len(graph)`, `id in graph` |
 
-### Connections (`connections.py`)
+### Connections (`structure/connections.py`)
 
 | Class | Fields | Notes |
 |-------|--------|-------|

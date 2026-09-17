@@ -1,6 +1,6 @@
 # Behaviors
 
-Source: `src/graphs/behaviors.py` (`BehaviorGroup`, `BehaviorPoint`,
+Source: `src/graphs/learning/behaviors.py` (`BehaviorGroup`, `BehaviorPoint`,
 `load_behaviors`, `render_behaviors`), config: `backend/behaviors.yaml`
 
 ## What it is

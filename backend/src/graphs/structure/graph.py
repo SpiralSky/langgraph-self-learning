@@ -20,15 +20,15 @@ from langgraph.constants import START as _LG_START
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, create_model
 
-from graphs.connections import Connection, RoutingConnection
+from graphs.structure.connections import Connection, RoutingConnection
 from graphs.nodes.base import PLACEHOLDER_RE, AbstractNode
-from graphs.serialization import (
+from graphs.persistence.serialization import (
     connection_from_dict,
     deserialize_annotation,
     node_from_dict,
     serialize_annotation,
 )
-from graphs.state import LearningGraphState
+from graphs.structure.state import LearningGraphState
 
 if TYPE_CHECKING:
     from typing import TypeAlias

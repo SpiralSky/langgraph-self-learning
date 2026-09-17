@@ -38,14 +38,14 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, create_model
 
 from graphs.api.collection import NodeCollection, NodeCollectionRecord
-from graphs.behaviors import BehaviorGroup, load_behaviors, render_behaviors
-from graphs.graph import RESERVED_IDS, Graph, GraphValidationError
+from graphs.learning.behaviors import BehaviorGroup, load_behaviors, render_behaviors
+from graphs.structure.graph import RESERVED_IDS, Graph, GraphValidationError
 from graphs.nodes.base import AbstractNode, DualCallable
 from graphs.nodes.graph_node import GraphNode
 from graphs.nodes.text_node import TextNode
 from graphs.nodes.tool_node import ToolCallNode
-from graphs.serialization import deserialize_annotation
-from graphs.storage import COLLECTION_PATH, dump_collection, load_collection
+from graphs.persistence.serialization import deserialize_annotation
+from graphs.persistence.storage import COLLECTION_PATH, dump_collection, load_collection
 from graphs.tools import ToolRegistry, default_registry
 
 _GENERATOR_TEMPLATE = """Build a single-pass graph that fulfills the user's request.

@@ -11,13 +11,13 @@ from langgraph.graph import START, StateGraph
 from pydantic import BaseModel, Field
 
 from graphs.api.collection import NodeCollection
-from graphs.graph import END as G_END
-from graphs.graph import START as G_START
-from graphs.graph import Graph
+from graphs.structure.graph import END as G_END
+from graphs.structure.graph import START as G_START
+from graphs.structure.graph import Graph
 from graphs.nodes.text_node import TextNode
 from graphs.nodes.tool_node import ToolCallNode
-from graphs.serialization import node_from_dict
-from graphs.storage import dump_collection, load_collection
+from graphs.persistence.serialization import node_from_dict
+from graphs.persistence.storage import dump_collection, load_collection
 from graphs.tools import ToolRegistry, require_arg
 
 

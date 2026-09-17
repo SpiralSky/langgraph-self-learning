@@ -20,7 +20,7 @@ from pathlib import Path
 from config import BACKEND_ROOT
 from graphs.api.collection import NodeCollection
 from graphs.api.stats import OnlineStats
-from graphs.serialization import node_from_dict
+from graphs.persistence.serialization import node_from_dict
 
 DATA_ROOT = BACKEND_ROOT / "data"
 COLLECTION_PATH = DATA_ROOT / "collection.json"

@@ -1,6 +1,6 @@
 # Prompt Node (`with_prompt`)
 
-Source: `src/graphs/prompt_node.py`
+Source: `src/graphs/nodes/prompt_node.py`
 
 ## What it is
 

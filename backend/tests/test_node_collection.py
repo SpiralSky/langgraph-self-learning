@@ -19,7 +19,7 @@ import pytest
 import graphs.api.collection as collection_mod
 from graphs.api.collection import NodeCollection
 from graphs.api.stats import OnlineStats
-from graphs.graph import END, START, Graph
+from graphs.structure.graph import END, START, Graph
 from graphs.nodes.graph_node import GraphNode
 from graphs.nodes.text_node import TextNode
 

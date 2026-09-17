@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from graphs.behaviors import (
+from graphs.learning.behaviors import (
     DEFAULT_BEHAVIORS_PATH,
     BehaviorGroup,
     BehaviorPoint,

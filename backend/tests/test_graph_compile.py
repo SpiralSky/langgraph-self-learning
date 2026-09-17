@@ -8,7 +8,7 @@ per-node LLM overrides, routing edges, and validation/LLM error paths.
 
 import pytest
 
-from graphs.graph import END, START, Graph, GraphValidationError
+from graphs.structure.graph import END, START, Graph, GraphValidationError
 from graphs.nodes.text_node import TextNode
 
 

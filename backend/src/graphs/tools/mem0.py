@@ -24,7 +24,7 @@ _memory = None
 
 def _build_config() -> dict:
     """A fully-local mem0 config rooted under ``backend/data/``."""
-    from graphs.storage import DATA_ROOT
+    from graphs.persistence.storage import DATA_ROOT
 
     return {
         "llm": {
