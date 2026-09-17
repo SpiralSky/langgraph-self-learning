@@ -15,14 +15,23 @@ from graphs.state import LearningGraphState
 
 
 class FakeLLM:
-    def __init__(self, content="ok"):
+    def __init__(self, content="ok", tokens=None):
         self.content = content
+        self.tokens = tokens
+
+    def _result(self, content):
+        if self.tokens is None:
+            return type("R", (), {"content": content})()
+        return type("R", (), {
+            "content": content,
+            "usage_metadata": {"output_tokens": self.tokens},
+        })()
 
     def invoke(self, prompt):
-        return type("R", (), {"content": f"{self.content}:{prompt}"})()
+        return self._result(f"{self.content}:{prompt}")
 
     async def ainvoke(self, prompt):
-        return type("R", (), {"content": f"a:{prompt}"})()
+        return self._result(f"a:{prompt}")
 
 
 @pytest.mark.parametrize(
@@ -165,3 +174,72 @@ def test_list_typed_field_gets_wrapped_value():
 def test_plain_dict_state_never_wraps_even_colliding_field_name():
     fn = TextNode("n", "d", "P").get_node(FakeLLM())
     assert fn.invoke({"response": "seed"}) == {"response": "ok:P"}
+
+
+# ---------------------------------------------------------------- run stats
+
+
+def test_invoke_self_records_tokens_and_time():
+    node = TextNode("n", "d", "P")
+    fn = node.get_node(FakeLLM(tokens=12))
+    fn.invoke({})
+    fn.invoke({})
+    assert node.run_counts == 2
+    assert node.output_tokens.count == 2
+    assert node.output_tokens.mean == 12.0
+    assert node.output_tokens.std == 0.0
+    assert node.output_time.count == 2
+    assert node.output_time.mean > 0.0
+
+
+async def test_ainvoke_self_records_tokens_and_time():
+    node = TextNode("n", "d", "P")
+    fn = node.get_node(FakeLLM(tokens=4))
+    await fn.ainvoke({})
+    assert node.run_counts == 1
+    assert node.output_tokens.count == 1
+    assert node.output_tokens.mean == 4.0
+    assert node.output_time.count == 1
+
+
+def test_invoke_skips_tokens_without_usage_metadata():
+    node = TextNode("n", "d", "P")
+    node.get_node(FakeLLM()).invoke({})
+    assert node.run_counts == 1
+    assert node.output_tokens.count == 0
+    assert node.output_time.count == 1
+
+
+def test_invoke_records_when_llm_raises():
+    class Boom:
+        def invoke(self, prompt):
+            raise RuntimeError("boom")
+
+    node = TextNode("n", "d", "P")
+    with pytest.raises(RuntimeError, match="boom"):
+        node.get_node(Boom()).invoke({})
+    assert node.run_counts == 0
+    assert node.output_tokens.count == 0
+
+
+async def test_ainvoke_records_when_llm_raises():
+    class Boom:
+        async def ainvoke(self, prompt):
+            raise RuntimeError("boom")
+
+    node = TextNode("m", "d", "P")
+    with pytest.raises(RuntimeError, match="boom"):
+        await node.get_node(Boom()).ainvoke({})
+    assert node.run_counts == 0
+    assert node.output_time.count == 0
+
+
+def test_updated_preserves_run_stats():
+    node = TextNode("summarize", "d", "Summarize {user_message}",
+                    params={"user_message": str})
+    node.get_node(FakeLLM(tokens=3)).invoke({"user_message": "hi"})
+    updated = node.updated(prompt="Re-summarize {user_message}")
+    assert updated.run_counts == 1
+    assert updated.output_tokens.count == 1
+    assert updated.output_tokens.mean == 3.0
+    assert updated.output_time.count == 1

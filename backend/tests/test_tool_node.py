@@ -242,6 +242,46 @@ def test_updated_rejects_fixed_and_unknown_fields():
         node.updated(bogus=1)
 
 
+def test_updated_preserves_run_stats():
+    node = ToolCallNode("n", "d", "echo", _registry())
+    node.get_node(FakeLLM()).invoke({"args": {"text": "cats"}})
+    swapped = node.updated(tool="higher")
+    assert swapped.run_counts == 1
+    assert swapped.output_time.count == 1
+    assert swapped.output_time.mean > 0.0
+    assert swapped.output_tokens.count == 0
+
+
+# ---------------------------------------------------------------- run stats
+
+
+def test_invoke_records_time_only():
+    node = ToolCallNode("search", "web search", "echo", _registry())
+    fn = node.get_node(FakeLLM())
+    fn.invoke({"args": {"text": "cats"}})
+    fn.invoke({"args": {"text": "cats"}})
+    assert node.run_counts == 2
+    assert node.output_tokens.count == 0
+    assert node.output_time.count == 2
+    assert node.output_time.mean > 0.0
+
+
+async def test_ainvoke_records_exactly_once():
+    node = ToolCallNode("search", "web search", "echo", _registry())
+    fn = node.get_node(FakeLLM())
+    assert await fn.ainvoke({"args": {"text": "cats"}}) == {"response": "echo:cats"}
+    assert node.run_counts == 1
+    assert node.output_time.count == 1
+
+
+def test_invoke_does_not_record_when_call_raises():
+    node = ToolCallNode("search", "web search", "strict", _registry())
+    with pytest.raises(ValueError, match="missing required tool argument"):
+        node.get_node(FakeLLM()).invoke({"args": {}})
+    assert node.run_counts == 0
+    assert node.output_time.count == 0
+
+
 # ------------------------------------------------------------ langgraph graphs
 
 

@@ -149,6 +149,7 @@ class GeneratorLLM:
 
 
 def _node(**kwargs):
+    kwargs.setdefault("collection", NodeCollection(embedder=_embed))
     return GeneratorNode("gen", "d", behaviors=[], registry=_registry(), **kwargs)
 
 

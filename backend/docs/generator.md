@@ -21,17 +21,23 @@ Safety and control come from the edges being closed:
 - The **core prompt template is a module constant** and never rewritten;
   behavior points are data rendered into it per node.
 - The observed builder contract is tiny: `add_node(id, type, name,
-  description, prompt?, params?, writes?, tool?, reuse?)` and
-  `add_edge(source, target)`. `START`/`END` are the reserved graph endpoints.
+  description, prompt?, params?, writes?, tool?, reuse?, from_collection?)`
+  and `add_edge(source, target)`. `START`/`END` are the reserved graph
+  endpoints. `from_collection` (collection node id) pulls an **existing**
+  step into the graph instead of building one — see Behavior.
 - Tool-node args are **not** bakeshable into the node — fixed `tool_args`
   are rejected, and arguments always flow through the `"args"` state key from
   an upstream text step (see `tools.md`).
 
-Reuse: nodes whose `add_node` call passes `reuse: true` are collected as the
-run's save-ready artifacts — a single flagged id saves that node directly, a
-chain saves as a generated `GraphNode` — and, with auto-save enabled (the
-default), persisted into a dedicated `NodeCollection` at **end of turn**
-(`data.md` describes the file layer). `auto_save=False` keeps everything
+Two reuse paths. Fresh steps: nodes whose `add_node` call passes
+`reuse: true` are collected as the run's save-ready artifacts — a single
+flagged id saves that node directly, a chain saves as a generated
+`GraphNode` — and, with auto-save enabled (the default), persisted into a
+dedicated `NodeCollection` at **end of turn** (`data.md` describes the file
+layer). Existing steps: generation starts with an internal **retrieve step**
+that, when the collection is non-empty, uses one extra LLM call to pick the
+nodes worth reusing for the current request; the builder then pulls them
+as-is via `add_node(from_collection=...)`. `auto_save=False` keeps everything
 transient.
 
 ## API
@@ -59,6 +65,10 @@ GeneratorNode(
   `node.behaviors_text`.
 - `updated(**changes)` allows **only** `name`/`description` — the prompt,
   params, writes, behaviors, and retries are structural for a generator node.
+- The reuse collection is the injected `collection` if given; otherwise it is
+  **restored from disk** via `load_collection(save_path)` (missing file →
+  empty collection) when `auto_save` is on, and is `None` (no reuse at all)
+  when `auto_save=False` with no injected collection.
 
 ### Builder call decoding
 
@@ -81,18 +91,26 @@ structure always validates against its own schema.
 1. Bind the builder tool definitions (`llm.bind_tools(BUILDER_TOOL_DEFS)`)
    when the LLM supports it; render the fixed template with the user message
    and append the rendered behaviors.
-2. For each attempt (initial + `retries` whole-spec re-generations): invoke the
-   LLM, decode the builder calls into nodes/edges, assemble the `Graph`, and
-   run `graph.validate()`. Any `GraphValidationError` (or decode/build error)
-   is appended to the prompt as `- <error>` feedback lines and the spec is
-   regenerated in full.
-3. After `retries + 1` total attempts without a valid graph, raise
+2. **Retrieve** (one extra LLM call, run once, only when the collection is
+   non-empty): the `_RETRIEVE_TEMPLATE` catalog (id, name, description, run
+   count per node) is scored against the request, returning a JSON
+   `{"ids": [...]}`. Unknown ids and malformed responses never crash — they
+   are filtered out and degraded to a short note. The chosen records are
+   rendered back into the build prompt as a "Reusable steps" section so the
+   model can reference the correct ids.
+3. For each attempt (initial + `retries` whole-spec re-generations): invoke the
+   LLM, decode the builder calls into nodes/edges — resolving
+   `from_collection` ids to the collection's live nodes — assemble the
+   `Graph`, and run `graph.validate()`. Any `GraphValidationError` (or
+   decode/build error) is appended to the prompt as `- <error>` feedback lines
+   and the spec is regenerated in full.
+4. After `retries + 1` total attempts without a valid graph, raise
    `RuntimeError` naming the last errors.
-4. On success, wrap the inner `Graph` as a `GraphNode`
+5. On success, wrap the inner `Graph` as a `GraphNode`
    (`input_map={"user_message": ...}`, `output_map={"response": ...}`) and run
    it through the existing nested-subgraph machinery; the node returns
    `{"response": <terminal output>}`.
-5. `_GeneratorFn` exposes `last_graph` (the generated `Graph`) and `reuse_ids`
+6. `_GeneratorFn` exposes `last_graph` (the generated `Graph`) and `reuse_ids`
    after a successful run, and auto-saves the reuse artifacts at end of turn
    when enabled.
 
@@ -125,19 +143,43 @@ result = fn.invoke({"user_message": "Compare closures and classes"})
 - **Nested execution** — the generated graph is not compiled into the outer
   graph; it runs in-turn through the `GraphNode` bridge, so it composes
   exactly like any other node.
+- **Retrieve-first reuse (LLM-selected)** — reuse selection is a strict
+  LLM/JSON step (`_RETRIEVE_TEMPLATE`); vector search never selects. It runs
+  once before the build loop and only when the collection has nodes —
+  an empty collection is detected up front and the step is skipped (no extra
+  call, no degraded prompt). Degraded or malformed responses are tolerated:
+  unknown ids are dropped and surfaced as a one-line note in the build
+  prompt.
+- **`from_collection` pulls** — `add_node(from_collection=<id>)` resolves to
+  the collection's **live instance**, pulled into the inner graph as a shared
+  reference: the nested run's self-recorded stats fold straight back into the
+  collection node (so selection can prefer proven nodes). Pulling the same
+  collection node twice in one graph, referencing an unknown id, or combining
+  `from_collection` with a fresh spec (`prompt`/`params`/`writes`/`tool`) or
+  with `reuse: true` all raise `ValueError` — the error text feeds the retry
+  loop. `get` counts a pull as a use (bumps `use_counts`).
 - **Reuse auto-save** — `wrap_reused(reuse_ids, graph, ...)` produces the
   save-ready prototypes (single node, or a `GraphNode` wrapping the full
   graph); `save_reused(nodes, collection, path, pinned=...)` adds them to the
   dedicated collection and persists it atomically. Non-serializable prototypes
-  raise `ValueError` before anything is stored.
+  raise `ValueError` before anything is stored. `reuse: true` and
+  `from_collection` never conflict: pulled nodes are already in the
+  collection and are never re-added (no double-add), while fresh `reuse`
+  steps are saved as before.
 
 ## Tests
 
 - `tests/test_generator.py` (26 tests) — template/behaviors assembly,
   decode paths, inner state auto-build, retry loop with error feedback, nested
   execution, failure exhaustion.
+- `tests/test_generator_reuse.py` (13 tests) — retrieve step (skipped on an
+  empty collection, catalog rendering, known/unknown/malformed id handling),
+  builder `from_collection` resolution (unknown id, repeated pull, fresh-spec
+  mix, `reuse` mix → error feedback), shared-instance stats folding, and
+  retrieve + fresh `reuse` in the same graph without double-add.
 - `tests/test_reuse_save.py` (15 tests) — reuse id collection, single-node vs
-  chain wrapping, collection persistence, transient (`auto_save=False`) mode.
+  chain wrapping, collection persistence, transient (`auto_save=False`) mode,
+  restore-from-disk collection.
 
 The suite is pure-unit — FakeLLM responses only, no network. Run from
 `backend/`: `.venv/bin/python -m pytest tests/ -q`.

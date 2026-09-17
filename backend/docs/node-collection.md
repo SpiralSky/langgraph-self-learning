@@ -5,11 +5,11 @@ Source: `src/graphs/api/collection.py` (`NodeCollection`,
 
 ## What it is
 
-`NodeCollection` is an in-memory store of node **prototypes** — instances of
-the `GraphNode` protocol (e.g. `TextNode` objects), **not** the LangGraph
-callables `get_node(llm)` returns. Each prototype is keyed by a uuid4 `id`
-(multiple nodes may share a `name`), usage/recency is tracked, and retrieval
-supports combined metadata filters plus semantic (vector) search.
+`NodeCollection` is an in-memory store of nodes — instances of the `GraphNode`
+protocol (e.g. `TextNode` objects), **not** the LangGraph callables
+`get_node(llm)` returns. Each node is keyed by a uuid4 `id` (multiple nodes
+may share a `name`), usage/recency is tracked, and retrieval supports combined
+metadata filters plus semantic (vector) search.
 
 It does **no persistence and no graph wiring**: an external system persists
 contents via `snapshot()` (deep-copied prototypes) or `records()` (metadata
@@ -31,11 +31,11 @@ Frozen, read-only metadata view of a stored node.
 | `pinned` | `bool` | protected from auto-pruning |
 | `created_at` | `datetime` | tz-aware UTC insertion time |
 | `last_used_at` | `datetime \| None` | tz-aware UTC time of last `get(id)` |
-| `run_counts` | `int` | bumped only by `record_run(id)` — execution outcomes, distinct from store reads |
-| `tokens_count` | `int` | number of runs that reported an output-token count (subset of `run_counts`) |
-| `tokens_mean` / `tokens_std` | `float \| None` | output-token mean/std over those runs (`None` while `tokens_count` is 0) |
-| `time_count` | `int` | number of runs that reported elapsed time (subset of `run_counts`) |
-| `time_mean` / `time_std` | `float \| None` | elapsed-time mean/std over those runs (`None` while `time_count` is 0) |
+| `run_counts` | `int` | the stored node's own counter — bumped only when the node **runs** (its callable self-records), distinct from store reads |
+| `tokens_count` | `int` | derived from the stored node: runs that reported an output-token count (subset of `run_counts`) |
+| `tokens_mean` / `tokens_std` | `float \| None` | the node's `output_tokens` mean/std over those runs |
+| `time_count` | `int` | derived from the stored node: runs that reported elapsed time (subset of `run_counts`) |
+| `time_mean` / `time_std` | `float \| None` | the node's `output_time` mean/std over those runs |
 
 ## API
 
@@ -45,13 +45,11 @@ Validates `0 < prune_to <= max_nodes` (`ValueError`).
 
 | Method | Signature / behavior |
 |--------|----------------------|
-| `add(node, *, pinned=False) -> str` | Store a prototype, return its new uuid4 id; rejects an empty/missing `node.name`; auto-prunes on overflow; embeds the node (embedder failure degrades gracefully — node stays stored, marked unembedded) |
-| `get(id) -> GraphNode` | Return a **deep copy** of the prototype, bumping `use_counts` + `last_used_at`; `KeyError` if unknown — the stored prototype is read-only from outside; mutate via `update`/`replace` |
-| `record_run(id, *, tokens=None, elapsed_seconds=None) -> None` | Record one execution outcome on the entry's run stats: bump `run_counts`, fold each non-`None` measurement (must be finite and non-negative) into the Welford accumulators; `KeyError` if unknown, `ValueError` on NaN/±inf/negative |
-| `restore_stats(id, *, run_counts, tokens, time) -> None` | Idempotently overwrite the entry's run telemetry with `OnlineStats` values; used by loaders (e.g. `load_collection`) to re-attach persisted stats; `KeyError` if unknown, `ValueError` for negative `run_counts` |
-| `get_callable(id, llm) -> DualCallable` | Deep-copy the stored prototype, wrap `llm` in a recording proxy that sums output tokens (`usage_metadata`) and elapsed time across the run, and return an instrumented callable that reports them via `record_run` on every **successful** top-level run; bumps nothing itself; `KeyError` if unknown |
-| `update(id, *, name=None, description=None, prompt=None, params=None, writes=None) -> None` | Field-level edit keyed by id; preserves all bookkeeping, never bumps; rebuilds via the stored node's `updated()` (re-validates placeholders ⊆ params); empty call is a no-op; `KeyError` if unknown; `TypeError` if the stored node has no `updated()` (use `replace`) |
-| `replace(id, new_node) -> None` | Swap in a rebuilt prototype under the same id; preserves bookkeeping, never bumps; `ValueError` on empty name |
+| `add(node, *, pinned=False) -> str` | Store a node, return its new uuid4 id; rejects an empty/missing `node.name`; auto-prunes on overflow; embeds the node (embedder failure degrades gracefully — node stays stored, marked unembedded) |
+| `get(id) -> GraphNode` | Return the stored node **by reference** (the live shared instance, no deep copy), bumping `use_counts` + `last_used_at`; `KeyError` if unknown. Aliasing is the flip side: mutating the returned node mutates the store — to change a stored node use `update_inplace`/`edit`/`replace` |
+| `update_inplace(id, *, reset_stats=False, **changes) -> None` | Field-level edit keyed by id, rebuilding via the stored node's `updated()` (re-validates placeholders ⊆ params); preserves all bookkeeping and run stats unless `reset_stats=True` (also works for a stale `run_counts`); empty call is a no-op; `KeyError` if unknown; `TypeError` if the stored node has no `updated()` (use `replace`) |
+| `edit(id, **changes) -> GraphNode` | Return a new, validated instance with the changes applied (via `updated()`, stats carried) — the store is **untouched**; `KeyError` if unknown, `TypeError` if no `updated()` |
+| `replace(id, new_node) -> None` | Swap in a rebuilt node under the same id; preserves bookkeeping (`id`, `use_counts`, `pinned`, `created_at`, `last_used_at`) and never bumps; the incoming node's own stats come with it (no implicit carry); `ValueError` on empty name |
 | `get_by_name(name) -> list[NodeCollectionRecord]` | All records with that name, insertion order; never bumps |
 | `search(query=None, *, limit=10, sort_by='use', within_newest=None)` | Metadata retrieval: case-insensitive substring over name OR description; `within_newest` narrows candidates to the newest-`z`; `sort_by` `'use'` \| `'newest'`; never mutates |
 | `top_by_use(k)` / `newest(k)` | Thin wrappers over `search` |
@@ -59,7 +57,7 @@ Validates `0 < prune_to <= max_nodes` (`ValueError`).
 | `remove(id)` | Drop the entry and its vector (allowed even when pinned); `KeyError` if unknown |
 | `pin(id)` / `unpin(id)` | Protect / release from pruning (idempotent); `KeyError` if unknown |
 | `records()` | All records, insertion order |
-| `snapshot() -> list[GraphNode]` | Deep copies of the stored prototypes, insertion order — for persistence |
+| `snapshot() -> list[GraphNode]` | Deep copies of the stored nodes, insertion order — for persistence |
 | `__len__` / `__contains__` | `len(coll)`, `id in coll` |
 
 ## Usage
@@ -97,9 +95,9 @@ Read-modify-write an existing node (metadata edits never fail; only
 params/writes/prompt interplay re-validates):
 
 ```python
-rec = coll.get(sid)             # deep copy — the stored prototype is read-only
-coll.update(sid, prompt="Summarize in at most two sentences: {user_message}")
-coll.update(sid, description="Tight one-sentence summaries.")
+rec = coll.get(sid)             # live reference — the stored node itself
+coll.update_inplace(sid, prompt="Summarize in at most two sentences: {user_message}")
+coll.update_inplace(sid, description="Tight one-sentence summaries.")
 coll.semantic_search("tight two-sentence summary")   # reflects the new text
 coll.replace(sid, TextNode(name="tight-summarizer", description="...",
                            prompt="...", params={"user_message": str}))
@@ -132,30 +130,36 @@ coll = NodeCollection(embedder=fake_embed)
   Unembedded entries (embedder failure at `add`) are skipped — they have no
   vector.
 - **Usage tracking** — `use_counts`/`last_used_at` bump **only** on
-  `get(id)`. Searches, listings, `get_by_name`, `update` and `replace` never
-  mutate usage.
-- **Run telemetry** — `use_counts` measures store reads; `run_counts` and the
-  token/time stats measure **executions**, and are bumped **only** by
-  `record_run(id, …)` (via `get_callable`, or directly). `get_callable`
-  deep-copies the prototype, wraps the supplied `llm` in a recording proxy
-  that accumulates `usage_metadata["output_tokens"]` and call wall-time across
-  the whole run — including nested `GraphNode` calls that thread the same llm
-  — and records on **success only**: an exception propagates and records
-  nothing. A run whose LLM responses carry no `usage_metadata` records time
-  only (tokens skipped, no heuristic). `get_callable` itself bumps nothing.
-  Per-node stats are folded in online (Welford) and stay on the store entry,
-  so they are **preserved across `update`/`replace`**, come from **`records()`/
-  `search`/etc.** as fields on the record, and are **persisted inline** in
-  `collection.json` — legacy dumps load with empty stats (see `docs/data.md`).
-- **Mutations don't bump** — `update`/`replace` rebuild the stored prototype
-  under the same id and leave `use_counts`, `pinned`, `created_at` and
-  `last_used_at` untouched. Only `get` records use/recency.
-- **Copy-returning `get`** — `get(id)` hands out a **deep copy**; the stored
-  prototype can never be mutated through it. To edit a stored node use
-  `update` (same-class rebuild via `updated()`, validated before the swap —
-  a failed edit leaves the store unchanged) or `replace` (swap in any
-  prototype). This also kills reference aliasing: an LLM holding a `get` copy
-  cannot corrupt the store or a graph sharing the same instance.
+  `get(id)`. Searches, listings, `get_by_name`, `update_inplace`/`edit`/
+  `replace` never mutate usage.
+- **Run telemetry (node-owned)** — every stored `AbstractNode` carries
+  `run_counts`, `output_tokens` and `output_time` (`OnlineStats`, Welford
+  mean/std), and the LangGraph callables **self-record**: the text-node
+  callable times its LLM call and reads `usage_metadata["output_tokens"]`
+  from each result (`record_result`; a run with no `usage_metadata` records
+  time only, tokens skipped — no heuristic), while tool and graph-node
+  callables record elapsed time only. Storage/retrieval reads never bump.
+  Because `get` (and a generator's `from_collection` pull) hand out the
+  **live instance**, stats recorded while a graph runs fold straight back
+  into the stored node. `NodeCollectionRecord` reproduces them
+  (counts/mean/std) as a read-only view. Stats are **preserved across
+  `update_inplace`/`edit`** (carried by `updated()`), **`replace`** (the
+  incoming node brings its own), are **persisted inline** in
+  `collection.json`, and are **restored straight onto the node** on load
+  (see `docs/data.md`).
+- **Mutations don't bump** — `update_inplace`/`replace` rebuild or swap the
+  stored node under the same id and leave `use_counts`, `pinned`,
+  `created_at` and `last_used_at` untouched. Only `get` records use/recency;
+  `edit` touches nothing.
+- **Reference-returning `get`** — `get(id)` returns the **stored node by
+  reference** (no deep copy): zero copying cost and, importantly, run stats
+  recorded by that node's callables are visible to the collection even when
+  the node runs inside a generated graph. The cost is aliasing — mutating a
+  `get` result mutates the store, so keep it read-only from outside and edit
+  via `update_inplace` (same-class rebuild via `updated()`, validated before
+  the swap — a failed edit leaves the store unchanged), `edit` (validated
+  copy, store untouched), or `replace` (swap in any node). `snapshot()`
+  remains the deep-copy escape hatch for persistence.
 - **Embedding consistency** — `add` embeds `"{name}\n{description}"` into the
   vector index; `update`/`replace` **re-embed iff that text changed** (a
   previously-unembedded entry re-attempts embedding). A changed vector is
@@ -174,17 +178,17 @@ coll = NodeCollection(embedder=fake_embed)
 
 ## Tests
 
-See `tests/test_node_collection.py` (73 tests): construction validation,
+See `tests/test_node_collection.py` (68 tests, plus node-owned-stats
+persistence in `tests/test_serialization.py`): construction validation,
 add/get/remove lifecycle, usage bumps, insertion order, combined-filter
 metadata search, pruning + pinning, deep-copy snapshots, the vector index
 (add/remove/prune vector lifecycle, cosine ranking, `within_newest`,
 sort-by variants, degradation paths), field-level mutation
-(`update`/`replace`: bookkeeping preservation, no-bump guarantee, re-embed on
-text change, unembedded re-attempt, validation/error paths, copy-returning
-`get`), and run telemetry (`record_run`/`restore_stats` measurement
-validation + Welford folding, `get_callable` recording via the `llm` proxy —
-token and time accumulation through nested runs, time-only on missing
-`usage_metadata`, no bump, success-only recording on `invoke`/`ainvoke`).
+(`update_inplace`/`edit`/`replace`: bookkeeping preservation, no-bump
+guarantee, `reset_stats`, re-embed on text change, unembedded re-attempt,
+validation/error paths, reference `get`), and node-owned run telemetry
+(records derive their run/token/time fields from the stored node's own
+stats).
 The suite is pure-unit — it never touches the network; tests inject a
 deterministic fake embedder, and the default fastembed embedder is verified
 to stay unconstructed.

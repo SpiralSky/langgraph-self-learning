@@ -15,6 +15,7 @@ graph runtime loosely, exactly like the ``GraphNode`` protocol intends.
 """
 
 from typing import Annotated, get_args, get_origin
+from time import perf_counter
 
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, TypeAdapter
@@ -53,12 +54,14 @@ class _TextNodeFn:
         params: dict[str, type],
         writes: dict[str, str],
         llm: Runnable,
+        node: AbstractNode,
     ) -> None:
         self.__name__ = name
         self._prompt = prompt
         self._validators = {p: TypeAdapter(ann) for p, ann in params.items()}
         self._writes = writes
         self._llm = llm
+        self._node = node
 
     def __call__(self, state: dict) -> dict:
         return self.invoke(state)
@@ -97,12 +100,16 @@ class _TextNodeFn:
 
     def invoke(self, state: dict) -> dict:
         """Read params by name, run the LLM on the filled prompt, spread writes."""
+        started = perf_counter()
         result = self._llm.invoke(self._fill_prompt(state))
+        self._node.record_result(result, perf_counter() - started)
         return self._update(state, str(result.content))
 
     async def ainvoke(self, state: dict) -> dict:
         """Async twin of ``invoke`` using ``await llm.ainvoke(...)``."""
+        started = perf_counter()
         result = await self._llm.ainvoke(self._fill_prompt(state))
+        self._node.record_result(result, perf_counter() - started)
         return self._update(state, str(result.content))
 
 
@@ -132,6 +139,7 @@ class TextNode(AbstractNode):
             params=self.params,
             writes=self.writes,
             llm=llm,
+            node=self,
         )
 
     def to_dict(self) -> dict:

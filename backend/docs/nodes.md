@@ -39,6 +39,9 @@ class AbstractNode(ABC):
     prompt: str
     params: dict[str, type]     # by-name reads from state
     writes: dict[str, str]      # node-local field -> state key
+    run_counts: int             # successful runs so far
+    output_tokens: OnlineStats  # output-token stats (Welford mean/std)
+    output_time: OnlineStats    # wall-clock-per-run stats (Welford mean/std)
 
     def __init__(self, name, description, prompt,
                  params: dict[str, type] | None = None,
@@ -55,7 +58,12 @@ class AbstractNode(ABC):
   `name`/`description`/`prompt` — its `params`/`writes` are derived from the
   `input_map`/`output_map` bridge, so editing them raises `ValueError` (swap
   in a fresh node via the collection's `replace()` instead). This is the
-  primitive behind `NodeCollection.update`.
+  primitive behind `NodeCollection.update_inplace`/`edit`.
+- **Run stats are carried across `updated()`** — the constructor re-inits the
+  stats to zero, so every `updated()` explicitly carries them over via
+  `_carry_stats` (copies `run_counts` and shares the same `OnlineStats`
+  instances, so later folds accumulate in place). All `updated()` overrides
+  (`TextNode`/`ToolCallNode`/`GraphNode`/`GeneratorNode`) do this.
 
 - **`params`** — by-name inputs: each key is a state field the node reads, the
   value is the annotation it must match. `{}` (default) is a **generator**
@@ -136,10 +144,22 @@ graph.invoke({"user_message": "Hey"})
   dicts for plain callers.
 - **Sync + async** — `invoke` is synchronous; `ainvoke` is a coroutine using
   `await llm.ainvoke(...)`.
+- **Self-recording stats** — every node carries `run_counts` (successful
+  runs) plus `output_tokens`/`output_time` (`OnlineStats`, Welford mean/std).
+  The callables `get_node(llm)` returns **self-record** on each run: the
+  text-node callable times its LLM invocation and reads
+  `usage_metadata["output_tokens"]` from the result (`record_result` — a
+  missing/non-numeric usage records time only), while tool and graph-node
+  callables record elapsed time only. Stats live on the node, so when the
+  same instance is shared (a `NodeCollection.get`, or a generator
+  `from_collection` pull), runs recorded anywhere fold back into it.
+  `record_run(*, tokens=..., elapsed_seconds=...)` / `record_result(...)` are
+  public for external recording; both reject NaN/negative values.
 
 ## Tests
 
-See `tests/test_nodes_base.py` (ABC + protocol/contract shape) and
-`tests/test_text_node.py` (construction, by-name params, pydantic-model state,
-plain-value + list-wrap writes, generator nodes, sync/async, integration
-against `langgraph==1.2.11`).
+See `tests/test_nodes_base.py` (ABC + protocol/contract shape + stats
+carry-over via `updated()`) and `tests/test_text_node.py` (construction,
+by-name params, pydantic-model state, plain-value + list-wrap writes,
+generator nodes, sync/async, self-recording stats, integration against
+`langgraph==1.2.11`).

@@ -15,11 +15,22 @@ EXPECTED_NODE_ATTRS = ("name", "description", "prompt", "input_shape")
 
 
 class _FakeLLM:
+    def __init__(self, tokens=None):
+        self.tokens = tokens
+
+    def _result(self, prompt):
+        if self.tokens is None:
+            return type("R", (), {"content": prompt})()
+        return type("R", (), {
+            "content": prompt,
+            "usage_metadata": {"output_tokens": self.tokens},
+        })()
+
     def invoke(self, prompt):
-        return type("R", (), {"content": prompt})()
+        return self._result(prompt)
 
     async def ainvoke(self, prompt):
-        return type("R", (), {"content": prompt})()
+        return self._result(prompt)
 
 
 class _StubFn:
@@ -174,3 +185,100 @@ def test_updated_no_changes_returns_fresh_instance():
     assert (fresh.name, fresh.description, fresh.prompt) == ("n", "d", "p")
     assert fresh.params == {}
     assert fresh.writes == {"result": "response"}
+
+
+# --------------------------------------------------------------- run stats
+
+
+def test_default_stats_are_zeroed():
+    node = _ConcreteNode("n", "d", "p")
+    assert node.run_counts == 0
+    assert (node.output_tokens.count, node.output_tokens.mean) == (0, 0.0)
+    assert (node.output_time.count, node.output_time.mean) == (0, 0.0)
+
+
+def test_record_run_bumps_count_and_folds_time_and_tokens():
+    node = _ConcreteNode("n", "d", "p")
+    node.record_run(tokens=10, elapsed_seconds=0.5)
+    node.record_run(tokens=10, elapsed_seconds=0.5)
+    assert node.run_counts == 2
+    assert node.output_tokens.count == 2
+    assert node.output_tokens.mean == 10.0
+    assert node.output_time.count == 2
+    assert node.output_time.mean == 0.5
+    assert node.output_tokens.std == 0.0
+    assert node.output_time.std == 0.0
+
+
+def test_record_run_time_only_and_stats_detail():
+    node = _ConcreteNode("n", "d", "p")
+    node.record_run(elapsed_seconds=0.2)
+    node.record_run(elapsed_seconds=1.0)
+    assert node.run_counts == 2
+    assert node.output_tokens.count == 0
+    assert node.output_time.count == 2
+    assert node.output_time.mean == pytest.approx(0.6)
+    assert node.output_time.std is not None
+
+
+def test_record_run_skips_none_fields_but_bumps_count():
+    node = _ConcreteNode("n", "d", "p")
+    node.record_run()
+    assert node.run_counts == 1
+    assert node.output_tokens.count == 0
+    assert node.output_time.count == 0
+
+
+def test_record_run_rejects_negative_and_nan():
+    node = _ConcreteNode("n", "d", "p")
+    with pytest.raises(ValueError, match="output_tokens must not be negative"):
+        node.record_run(tokens=-1, elapsed_seconds=0.1)
+    with pytest.raises(ValueError, match="must not be NaN"):
+        node.record_run(tokens=float("nan"), elapsed_seconds=0.1)
+    with pytest.raises(ValueError, match="elapsed_seconds must not be negative"):
+        node.record_run(tokens=1, elapsed_seconds=-0.1)
+    with pytest.raises(ValueError, match="must not be NaN"):
+        node.record_run(tokens=1, elapsed_seconds=float("nan"))
+    with pytest.raises(ValueError, match="output_tokens must be numeric"):
+        node.record_run(tokens="ten", elapsed_seconds=0.1)
+    assert node.run_counts == 0
+
+
+def test_record_result_extracts_output_tokens_and_skips_when_absent():
+    node = _ConcreteNode("n", "d", "p")
+
+    class Result:
+        usage_metadata = {"output_tokens": 7}
+
+    node.record_result(Result(), 0.25)
+    assert node.run_counts == 1
+    assert node.output_tokens.count == 1
+    assert node.output_tokens.mean == 7.0
+    assert node.output_time.count == 1
+
+    class NoUsage:
+        pass
+
+    node.record_result(NoUsage(), 0.25)
+    assert node.run_counts == 2
+    assert node.output_tokens.count == 1
+    assert node.output_time.count == 2
+
+    class TextTokens:
+        usage_metadata = {"output_tokens": "twenty"}
+
+    node.record_result(TextTokens(), 0.25)
+    assert node.run_counts == 3
+    assert node.output_tokens.count == 1
+    assert node.output_time.count == 3
+
+
+def test_updated_preserves_run_stats():
+    node = _ConcreteNode("n", "d", "p")
+    node.record_run(tokens=5, elapsed_seconds=0.3)
+    updated = node.updated(name="renamed")
+    assert updated.run_counts == 1
+    assert updated.output_tokens.count == 1
+    assert updated.output_tokens.mean == 5.0
+    assert updated.output_time.count == 1
+    assert node.run_counts == 1

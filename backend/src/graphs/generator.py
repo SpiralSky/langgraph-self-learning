@@ -19,6 +19,13 @@ the bound callable (``last_graph`` / ``reuse_ids``). With auto-save enabled
 (``wrap_reused``) and persisted into a dedicated :class:`NodeCollection` at the
 end of the turn (``save_reused`` -> storage layer); ``auto_save=False`` keeps
 the node fully transient.
+
+When that collection holds saved steps, a separate internal **retrieve** step
+selects the ones worth reusing for the request and the builder can pull them
+into the generated graph via ``add_node(from_collection=...)`` instead of
+building them from scratch; pulled nodes are the collection's **live**
+instances, so run stats recorded while the nested graph runs fold back into
+the collection.
 """
 
 from __future__ import annotations
@@ -30,7 +37,7 @@ from pathlib import Path
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, create_model
 
-from graphs.api.collection import NodeCollection
+from graphs.api.collection import NodeCollection, NodeCollectionRecord
 from graphs.behaviors import BehaviorGroup, load_behaviors, render_behaviors
 from graphs.graph import RESERVED_IDS, Graph, GraphValidationError
 from graphs.nodes.base import AbstractNode, DualCallable
@@ -38,7 +45,7 @@ from graphs.nodes.graph_node import GraphNode
 from graphs.nodes.text_node import TextNode
 from graphs.nodes.tool_node import ToolCallNode
 from graphs.serialization import deserialize_annotation
-from graphs.storage import COLLECTION_PATH, dump_collection
+from graphs.storage import COLLECTION_PATH, dump_collection, load_collection
 from graphs.tools import ToolRegistry, default_registry
 
 _GENERATOR_TEMPLATE = """Build a single-pass graph that fulfills the user's request.
@@ -59,6 +66,9 @@ add_node(id, type, name, description, prompt?, params?, writes?, tool?, reuse?)
     upstream text step that writes "args" as a JSON object string.
   - set "reuse" to true to mark the step's output for saving into the
     reusable set, so it can be reused in later answers.
+  - set "from_collection" to a collection node id to reuse an existing step
+    from the "Reusable steps" list instead of building one; then omit
+    "prompt", "params", "writes", and "tool" (fresh or pulled, never both).
 
 add_edge(source, target)
   - wires step "source" to step "target"; the reserved ids START and END
@@ -79,7 +89,8 @@ BUILDER_TOOL_DEFS: list[dict] = [
             "name": "add_node",
             "description": (
                 "Add a step to the generated graph. type 'text' adds an LLM "
-                "step; type 'tool' adds a whitelisted tool step."
+                "step; type 'tool' adds a whitelisted tool step; "
+                "'from_collection' reuses an existing step from the collection."
             ),
             "parameters": {
                 "type": "object",
@@ -103,6 +114,14 @@ BUILDER_TOOL_DEFS: list[dict] = [
                     "tool": {
                         "type": "string",
                         "description": "Required for tool steps: whitelisted tool, e.g. ddgs, mem0_remember, mem0_retrieve.",
+                    },
+                    "from_collection": {
+                        "type": "string",
+                        "description": (
+                            "Collection node id to reuse as-is instead of "
+                            "building a fresh step; when set, omit prompt, "
+                            "params, writes, and tool."
+                        ),
                     },
                     "reuse": {
                         "type": "boolean",
@@ -180,6 +199,69 @@ def _decode_json_calls(content: str) -> list[dict]:
             )
         decoded.append({"name": call.get("name"), "args": args})
     return decoded
+
+
+#: Max records shown to the LLM in the retrieve-step catalog. The catalog
+#: stays compact because the retrieve call is one extra LLM input per turn.
+_CATALOG_LIMIT = 20
+
+#: Fixed prompt for the internal retrieve step: given the user's request and a
+#: catalog of reusable steps, it returns the collection node ids worth pulling
+#: into the generated graph. Runs only when the reuse collection has nodes.
+_RETRIEVE_TEMPLATE = """Select reusable steps for the user's request.
+
+You can reuse existing steps from a node collection instead of building them
+from scratch. A step is worth reusing when it already performs (or clearly
+covers) part of the request.
+
+Available reusable steps:
+{catalog}
+
+User request: {user_message}
+
+Return ONLY a JSON object with the chosen steps' ids, e.g.
+{{"ids": ["<id>", "..."]}} -- no other text. An empty list means nothing fits.
+"""
+
+
+def _decode_retrieved_ids(response: object) -> list[str]:
+    """Extract a list of collection node ids from an LLM retrieve response.
+
+    Mirrors :func:`decode_builder_calls`' fallback style: tool calls carrying
+    an ``id``/``ids`` argument are preferred; otherwise the response content
+    is parsed as JSON in the form of an object ``{"ids": [...]}`` or a bare
+    list of strings.
+
+    :raises ValueError: when no usable id list can be read from the response.
+    """
+    tool_calls = getattr(response, "tool_calls", None)
+    if tool_calls:
+        extracted: list[str] = []
+        for call in tool_calls:
+            args = dict(call.get("args") or {})
+            value = args.get("id") or args.get("ids")
+            if isinstance(value, str):
+                extracted.append(value)
+            elif isinstance(value, list):
+                extracted.extend(item for item in value if isinstance(item, str))
+        if extracted:
+            return extracted
+    content = getattr(response, "content", None)
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError(
+            "retrieve response carried no usable ids (no tool_calls and no "
+            "JSON content with an 'ids' list)"
+        )
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"retrieve JSON is not valid JSON: {exc}") from exc
+    ids = payload.get("ids") if isinstance(payload, dict) else payload
+    if not isinstance(ids, list):
+        raise TypeError('retrieve JSON must be an object with an "ids" list')
+    if not all(isinstance(an_id, str) for an_id in ids):
+        raise TypeError("retrieve ids must all be strings")
+    return ids
 
 
 def build_state_model(nodes: Mapping[str, AbstractNode]) -> type[BaseModel]:
@@ -303,6 +385,9 @@ class _GeneratorFn:
         self._pinned = pinned
         self.last_graph: Graph | None = None
         self.reuse_ids: list[str] = []
+        self._retrieved_ids: list[str] = []
+        self._retrieved: list[NodeCollectionRecord] = []
+        self._retrieve_note: str | None = None
 
     def __call__(self, state: dict) -> dict:
         return self.invoke(state)
@@ -323,6 +408,7 @@ class _GeneratorFn:
     def _assemble(self, user_message: object, errors: list[str]) -> str:
         prompt = self._prompt.format(user_message=user_message)
         prompt += self._behaviors_text
+        prompt += self._reuse_section()
         if errors:
             prompt += (
                 "\n\nThe previous attempt was rejected for these reasons:\n"
@@ -331,7 +417,97 @@ class _GeneratorFn:
             )
         return prompt
 
+    def _reuse_section(self) -> str:
+        """Render the retrieved-steps section appended to the build prompt.
+
+        The retrieve note is rendered even when nothing was retrieved, so a
+        degraded retrieve step still surfaces its warning to the model.
+        """
+        if not self._retrieved and not self._retrieve_note:
+            return ""
+        parts: list[str] = []
+        if self._retrieved:
+            lines = "\n".join(
+                f"- {record.id} ({record.name}): {record.description}"
+                for record in self._retrieved
+            )
+            parts.append(
+                "Reusable steps selected for this request. To reuse one, use "
+                "add_node(from_collection='<id>') and omit prompt/params/writes "
+                f"(and tool):\n{lines}"
+            )
+        if self._retrieve_note:
+            parts.append(self._retrieve_note)
+        return "\n\n" + "\n".join(parts)
+
+    def _retrieve_prompt(self, user_message: object) -> str | None:
+        """Render the retrieve prompt, or ``None`` when the step is skipped.
+
+        Skipped without a collection or when the collection is empty — the
+        retrieve step is an extra LLM call that only pays off when there is
+        already something to reuse.
+        """
+        if self._collection is None or len(self._collection) == 0:
+            return None
+        records = self._collection.records()[:_CATALOG_LIMIT]
+        catalog = "\n".join(
+            f"- {record.id}: {record.name} — {record.description} "
+            f"(ran {record.run_counts} times)"
+            for record in records
+        )
+        return _RETRIEVE_TEMPLATE.format(
+            catalog=catalog, user_message=user_message
+        )
+
+    def _apply_retrieve(self, response: object) -> None:
+        """Fold a retrieve response into ``_retrieved``/``_retrieve_note``.
+
+        A malformed response, or ids that are not in the collection, never
+        crash the generation — they degrade to a short note appended to the
+        build prompt so the model can correct itself.
+        """
+        try:
+            ids = _decode_retrieved_ids(response)
+        except (TypeError, ValueError) as exc:
+            self._retrieved_ids = []
+            self._retrieved = []
+            self._retrieve_note = f"note: retrieve step was ignored ({exc})"
+            return
+        unknown = [an_id for an_id in ids if an_id not in self._collection]
+        known = [an_id for an_id in ids if an_id in self._collection]
+        by_id = {record.id: record for record in self._collection.records()}
+        self._retrieved_ids = known
+        self._retrieved = [by_id[an_id] for an_id in known]
+        self._retrieve_note = (
+            f"note: retrieve step returned unknown collection ids "
+            f"{sorted(unknown)!r}; they were ignored — choose only from "
+            "the catalog."
+            if unknown
+            else None
+        )
+
+    def _retrieve(self, user_message: object) -> None:
+        """Run the internal retrieve step (sync); no-op when skipped."""
+        prompt = self._retrieve_prompt(user_message)
+        if prompt is None:
+            self._retrieved_ids = []
+            self._retrieved = []
+            self._retrieve_note = None
+            return
+        self._apply_retrieve(self._llm.invoke(prompt))
+
+    async def _aretrieve(self, user_message: object) -> None:
+        """Run the internal retrieve step; async twin of :meth:`_retrieve`."""
+        prompt = self._retrieve_prompt(user_message)
+        if prompt is None:
+            self._retrieved_ids = []
+            self._retrieved = []
+            self._retrieve_note = None
+            return
+        self._apply_retrieve(await self._llm.ainvoke(prompt))
+
     def _generate_sync(self, user_message: object) -> Graph:
+        self._retrieve(user_message)
         last_errors: list[str] = []
         bound = self._bind()
         for _ in range(self._retries + 1):
@@ -349,6 +525,7 @@ class _GeneratorFn:
         self._raise_generation_failed(last_errors, self._retries + 1)
 
     async def _generate_async(self, user_message: object) -> Graph:
+        await self._aretrieve(user_message)
         last_errors: list[str] = []
         bound = self._bind()
         for _ in range(self._retries + 1):
@@ -383,12 +560,13 @@ class _GeneratorFn:
         nodes: dict[str, AbstractNode] = {}
         edges: list[tuple[str, str]] = []
         errors: list[str] = []
+        pulled: set[str] = set()
         for call in calls:
             name = call.get("name")
             args = call.get("args") or {}
             try:
                 if name == "add_node":
-                    node_id, node = self._make_node(args)
+                    node_id, node = self._make_node(args, pulled)
                     self._check_node_id(node_id, nodes)
                     nodes[node_id] = node
                 elif name == "add_edge":
@@ -405,6 +583,7 @@ class _GeneratorFn:
             for call in calls
             if call.get("name") == "add_node"
             and call.get("args", {}).get("reuse")
+            and not call.get("args", {}).get("from_collection")
         ]
         graph = Graph(state_model=build_state_model(nodes))
         for node_id, node in nodes.items():
@@ -416,8 +595,14 @@ class _GeneratorFn:
                 errors.append(str(exc))
         return graph, errors
 
-    def _make_node(self, args: dict) -> tuple[str, AbstractNode]:
-        """Build the node (plus its id) for an ``add_node`` call."""
+    def _make_node(
+        self, args: dict, pulled: set[str]
+    ) -> tuple[str, AbstractNode]:
+        """Build the node (plus its id) for an ``add_node`` call.
+
+        ``pulled`` tracks collection node ids already added under a graph id
+        in this build, so a collection node cannot be reused twice.
+        """
         node_id = args.get("id")
         node_type = args.get("type")
         name = args.get("name")
@@ -428,6 +613,9 @@ class _GeneratorFn:
             raise ValueError("add_node 'name' must be a non-empty string")
         if not isinstance(description, str) or not description:
             raise ValueError("add_node 'description' must be a non-empty string")
+        from_collection = args.get("from_collection")
+        if from_collection is not None:
+            return self._pull_node(node_id, from_collection, args, pulled)
         writes = _normalize_writes(args.get("writes"))
         if node_type == "text":
             prompt = args.get("prompt")
@@ -458,6 +646,45 @@ class _GeneratorFn:
                 f"unknown node type {node_type!r}; expected 'text' or 'tool'"
             )
         return node_id, node
+
+    def _pull_node(
+        self, node_id: str, from_collection: str, args: dict, pulled: set[str]
+    ) -> tuple[str, AbstractNode]:
+        """Resolve ``add_node(from_collection=...)`` to the collection's node.
+
+        The collection's **live instance** is pulled into the inner graph
+        (shared reference), so run stats recorded while the nested graph runs
+        fold back into the collection. Duplicate use of one collection node in
+        a single graph is a build error, as is mixing a pull with a fresh spec
+        or with ``reuse`` — the error text feeds the retry loop.
+
+        :raises ValueError: for an unknown id, a repeated pull, a mixed spec,
+            or ``reuse`` combined with a pull.
+        """
+        if self._collection is None or from_collection not in self._collection:
+            raise ValueError(
+                f"add_node 'from_collection' references unknown collection "
+                f"node {from_collection!r}"
+            )
+        if args.get("reuse"):
+            raise ValueError(
+                "add_node cannot set both 'reuse' and 'from_collection': a "
+                "collection node is already in the reusable set"
+            )
+        if from_collection in pulled:
+            raise ValueError(
+                f"collection node {from_collection!r} was already added to "
+                "this graph under another id; use each collection node at "
+                "most once"
+            )
+        for key in ("prompt", "params", "writes", "tool"):
+            if args.get(key) not in (None, {}, ""):
+                raise ValueError(
+                    f"add_node 'from_collection' cannot be combined with a "
+                    f"fresh spec; omit {key!r}"
+                )
+        pulled.add(from_collection)
+        return node_id, self._collection.get(from_collection)
 
     @staticmethod
     def _check_node_id(node_id: str, nodes: dict[str, AbstractNode]) -> None:
@@ -604,11 +831,12 @@ class GeneratorNode(AbstractNode):
         self._auto_save = auto_save
         self._pinned = reuse_pinned
         self._save_path = Path(save_path)
-        self._reuse_collection = (
-            collection
-            if collection is not None
-            else (NodeCollection(embedder=None) if auto_save else None)
-        )
+        if collection is not None:
+            self._reuse_collection = collection
+        elif auto_save:
+            self._reuse_collection = load_collection(self._save_path)
+        else:
+            self._reuse_collection = None
         groups = self._load_behaviors(behaviors)
         self.behaviors_text = render_behaviors(groups)
         super().__init__(
@@ -674,7 +902,7 @@ class GeneratorNode(AbstractNode):
                     f"unsupported fields: {sorted(set(changes))}; supported: "
                     f"{sorted(allowed)}"
                 )
-        return type(self)(
+        rebuilt = type(self)(
             name=changes.get("name", self.name),
             description=changes.get("description", self.description),
             auto_save=self._auto_save,
@@ -682,6 +910,8 @@ class GeneratorNode(AbstractNode):
             save_path=self._save_path,
             reuse_pinned=self._pinned,
         )
+        self._carry_stats(rebuilt)
+        return rebuilt
 
 
 def _normalize_params(raw: object) -> dict[str, type]:

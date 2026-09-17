@@ -16,6 +16,7 @@ tool name, never free-form.
 from __future__ import annotations
 
 import json
+from time import perf_counter
 from typing import Self
 
 from langchain_core.runnables import Runnable
@@ -49,11 +50,13 @@ class _ToolCallFn:
         tool: str,
         registry: ToolRegistry,
         writes: dict[str, str],
+        node: AbstractNode,
     ) -> None:
         self.__name__ = name
         self._tool = tool
         self._registry = registry
         self._writes = writes
+        self._node = node
 
     def __call__(self, state: dict) -> dict:
         return self.invoke(state)
@@ -119,7 +122,9 @@ class _ToolCallFn:
             tool_name = self._tool
         args = self._coerce_args(self._read(state, "args"))
         run = self._registry.get(str(tool_name))
+        started = perf_counter()
         result = run(args)
+        self._node.record_run(elapsed_seconds=perf_counter() - started)
         return self._update(state, str(result))
 
     async def ainvoke(self, state: dict) -> dict:
@@ -187,6 +192,7 @@ class ToolCallNode(AbstractNode):
             tool=self.tool,
             registry=self.registry,
             writes=self.writes,
+            node=self,
         )
 
     def updated(self, **changes: object) -> Self:
@@ -208,13 +214,15 @@ class ToolCallNode(AbstractNode):
                     f"unsupported fields: {sorted(set(changes))}; supported: "
                     f"{sorted(allowed)}"
                 )
-        return type(self)(
+        rebuilt = type(self)(
             name=changes.get("name", self.name),
             description=changes.get("description", self.description),
             tool=changes.get("tool", self.tool),
             registry=self.registry,
             writes=changes.get("writes", self.writes),
         )
+        self._carry_stats(rebuilt)
+        return rebuilt
 
     def to_dict(self) -> dict:
         """Type-tagged JSON-ready dict (``"type": "tool"``).

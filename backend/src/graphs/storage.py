@@ -4,9 +4,11 @@ Storage helpers write atomic JSON (temp file + rename) and expose
 ``dump_collection`` / ``load_collection`` for round-tripping a whole
 ``NodeCollection`` through the type-tagged serializers. Persisted collections
 store each node's output-token/time summary (count/mean/std) and ``run_counts``
-inline per node. Per-entry bookkeeping that cannot be restored (ids,
-``pinned``, timestamps, use counts) is still deliberately not stored — restore
-rebuilds prototypes with the external system's default configuration.
+inline per node. ``load_collection`` applies those stats straight onto the
+deserialized node (run stats live on nodes, not on collection entries).
+Per-entry bookkeeping that cannot be restored (ids, ``pinned``, timestamps,
+use counts) is still deliberately not stored — restore rebuilds prototypes
+with the external system's default configuration.
 """
 
 from __future__ import annotations
@@ -63,31 +65,50 @@ def dump_collection(collection: NodeCollection, path: str | Path = COLLECTION_PA
     :type path: str | Path
     """
     nodes: list[dict] = []
-    for node, rec in zip(collection.snapshot(), collection.records()):
+    for node in collection.snapshot():
         to_dict = getattr(node, "to_dict", None)
         if to_dict is None:
             raise ValueError(
                 f"collection contains a node without to_dict(): {node.name!r}"
             )
+        tokens: OnlineStats = getattr(node, "output_tokens", None) or OnlineStats()
+        time: OnlineStats = getattr(node, "output_time", None) or OnlineStats()
         nodes.append(
             {
                 "node": to_dict(),
                 "stats": {
-                    "run_counts": rec.run_counts,
+                    "run_counts": getattr(node, "run_counts", 0),
                     "tokens": {
-                        "count": rec.tokens_count,
-                        "mean": rec.tokens_mean,
-                        "std": rec.tokens_std,
+                        "count": tokens.count,
+                        "mean": tokens.mean if tokens.count else None,
+                        "std": tokens.std,
                     },
                     "time": {
-                        "count": rec.time_count,
-                        "mean": rec.time_mean,
-                        "std": rec.time_std,
+                        "count": time.count,
+                        "mean": time.mean if time.count else None,
+                        "std": time.std,
                     },
                 },
             }
         )
     write_json(path, {"nodes": nodes})
+
+
+def _apply_node_stats(node, stats: dict) -> None:
+    """Fold persisted run telemetry ``stats`` onto a freshly built node.
+
+    ``run_counts`` must be a non-negative integer; token/time summaries are
+    restored as ``OnlineStats`` (Welford ``_m2`` included) so recording can
+    continue seamlessly after a reload.
+
+    :raises ValueError: for a negative ``run_counts``.
+    """
+    run_counts = int(stats["run_counts"])
+    if run_counts < 0:
+        raise ValueError("run_counts must not be negative")
+    node.run_counts = run_counts
+    node.output_tokens = OnlineStats.from_dict(stats["tokens"])
+    node.output_time = OnlineStats.from_dict(stats["time"])
 
 
 def load_collection(
@@ -99,6 +120,10 @@ def load_collection(
     Vectors are re-embedded on ``add`` with the supplied (or default)
     embedder; an embedding failure degrades to ``embedded=False`` exactly as a
     normal ``add`` would. A missing file yields an empty collection.
+
+    Each entry's persisted run stats are applied directly onto the rebuilt
+    node before it is added; legacy ``{"nodes": [<node dict>]}`` dumps (no
+    ``stats``) load with empty telemetry.
 
     :param path: Source file (default ``backend/data/collection.json``).
     :type path: str | Path
@@ -113,13 +138,9 @@ def load_collection(
         return collection
     for item in data["nodes"]:
         node_data = item["node"] if isinstance(item, dict) and "node" in item else item
-        node_id = collection.add(node_from_dict(node_data))
+        node = node_from_dict(node_data)
         stats = item.get("stats") if isinstance(item, dict) else None
         if stats:
-            collection.restore_stats(
-                node_id,
-                run_counts=stats["run_counts"],
-                tokens=OnlineStats.from_dict(stats["tokens"]),
-                time=OnlineStats.from_dict(stats["time"]),
-            )
+            _apply_node_stats(node, stats)
+        collection.add(node)
     return collection
