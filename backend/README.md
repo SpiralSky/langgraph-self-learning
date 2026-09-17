@@ -28,3 +28,4 @@ See ``docs/`` for developer/operator documentation:
 | ``docs/behaviors.md`` | Behaviors: sectioned ``backend/behaviors.yaml`` data, stable point keys, rendering into the fixed generator template |
 | ``docs/generator.md`` | ``GeneratorNode``: single-pass ``add_node``/``add_edge`` graph generation, validate + retry, nested in-turn execution, reuse auto-save |
 | ``docs/data.md`` | Persistence: explicit JSON serializers, atomic storage helpers, ``backend/data/`` layout |
+| ``docs/improvements.md`` | Improvement loop: suggestion → structured patches over behavior entries (whole-entry regeneration + programmatic diff), JSONL storage, most-recent-wins application, node-targeted edits, ``POST /feedback`` API |
