@@ -77,9 +77,10 @@ load_collection(path=COLLECTION_PATH, embedder=None) -> NodeCollection
   `stats` carries `run_counts` and the token/time (count/mean/std) summaries. A
   node without `to_dict` raises `ValueError` naming it.
 - `load_collection` restores the file (missing file → empty collection),
-  rebuilding every node through `node_from_dict` and re-applying each entry's
-  `stats` via `restore_stats`. Legacy `{"nodes": [<node dict>]}` dumps (no
-  `stats`) still load, with stats defaulting to empty.
+  rebuilding every node through `node_from_dict` and applying each entry's
+  `stats` directly onto the deserialized node (run stats live on nodes, not on
+  collection entries). Legacy `{"nodes": [<node dict>]}` dumps (no `stats`)
+  still load, with stats defaulting to empty.
 
 ## Layout
 

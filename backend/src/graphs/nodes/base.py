@@ -17,6 +17,8 @@ from typing import Protocol, Self
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
+from graphs.api.stats import OnlineStats
+
 PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_]\w*)\}")
 
 
@@ -65,6 +67,9 @@ class AbstractNode(ABC):
     prompt: str
     params: dict[str, type]
     writes: dict[str, str]
+    run_counts: int
+    output_tokens: OnlineStats
+    output_time: OnlineStats
 
     def __init__(
         self,
@@ -101,6 +106,73 @@ class AbstractNode(ABC):
         self.prompt = prompt
         self.params = dict(params)
         self.writes = dict(writes)
+        self.run_counts = 0
+        self.output_tokens = OnlineStats()
+        self.output_time = OnlineStats()
+
+    @staticmethod
+    def _checked_float(value: object, label: str) -> float:
+        """Coerce ``value`` to a finite, non-negative float or raise ValueError."""
+        if isinstance(value, bool):
+            raise ValueError(f"{label} must be numeric, got bool")
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{label} must be numeric, got {type(value).__name__}"
+            ) from None
+        if number != number:  # NaN
+            raise ValueError(f"{label} must not be NaN")
+        if number < 0:
+            raise ValueError(f"{label} must not be negative")
+        return number
+
+    def record_run(
+        self,
+        *,
+        tokens: object | None = None,
+        elapsed_seconds: object | None = None,
+    ) -> None:
+        """Record a single run: bump the count and fold time/tokens in.
+
+        ``elapsed_seconds`` is validated and recorded when not ``None``; the
+        same holds for ``tokens``. Both reject NaN/negative values with a
+        ``ValueError``. Nodes are collection-agnostic — this mutates only this
+        instance (shared across a collection via reference semantics).
+        """
+        seconds = (
+            None if elapsed_seconds is None
+            else self._checked_float(elapsed_seconds, "elapsed_seconds")
+        )
+        count = (
+            None if tokens is None else self._checked_float(tokens, "output_tokens")
+        )
+        self.run_counts += 1
+        if seconds is not None:
+            self.output_time.update(seconds)
+        if count is not None:
+            self.output_tokens.update(count)
+
+    def record_result(self, result: object, elapsed_seconds: object | None) -> None:
+        """Record a run from an LLM result, extracting ``output_tokens`` usage.
+
+        Token usage is read from ``usage_metadata["output_tokens"]``; a missing
+        attribute/key or a non-numeric value skips the token update (time is
+        still recorded).
+        """
+        usage = getattr(result, "usage_metadata", None)
+        tokens: object | None = None
+        if isinstance(usage, dict):
+            value = usage.get("output_tokens")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                tokens = value
+        self.record_run(tokens=tokens, elapsed_seconds=elapsed_seconds)
+
+    def _carry_stats(self, new: "AbstractNode") -> None:
+        """Copy this node's run stats onto a freshly rebuilt instance."""
+        new.run_counts = self.run_counts
+        new.output_tokens = self.output_tokens
+        new.output_time = self.output_time
 
     def updated(self, **changes: object) -> Self:
         """Return a new, validated instance with ``changes`` applied.
@@ -118,13 +190,15 @@ class AbstractNode(ABC):
             raise TypeError(
                 f"unsupported fields: {unknown}; supported: {sorted(allowed)}"
             )
-        return type(self)(
+        rebuilt = type(self)(
             name=changes.get("name", self.name),
             description=changes.get("description", self.description),
             prompt=changes.get("prompt", self.prompt),
             params=changes.get("params", self.params),
             writes=changes.get("writes", self.writes),
         )
+        self._carry_stats(rebuilt)
+        return rebuilt
 
     @abstractmethod
     def get_node(self, llm: Runnable) -> DualCallable:

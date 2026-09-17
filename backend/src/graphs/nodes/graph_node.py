@@ -13,6 +13,7 @@ LLM), and (4) surfaces each ``output_map`` inner key to its outer state key —
 multiple entries produce the multi-output partial update.
 """
 
+from time import perf_counter
 from typing import TYPE_CHECKING, Self
 
 from pydantic import BaseModel, TypeAdapter
@@ -43,6 +44,7 @@ class _GraphNodeFn:
         output_map: dict[str, str],
         params: dict[str, type],
         llm: "Runnable",
+        node: AbstractNode,
     ) -> None:
         self.__name__ = name
         self._graph = graph
@@ -50,6 +52,7 @@ class _GraphNodeFn:
         self._output_map = output_map
         self._validators = {p: TypeAdapter(ann) for p, ann in params.items()}
         self._llm = llm
+        self._node = node
         self._compiled = None
 
     def __call__(self, state: dict) -> dict:
@@ -81,7 +84,9 @@ class _GraphNodeFn:
     def invoke(self, state: dict) -> dict:
         """Run the inner graph on the bridged initial state, surface outputs."""
         inner_state = self._outer_state(state)
+        started = perf_counter()
         result = self._compiled_graph().invoke(inner_state)
+        self._node.record_run(elapsed_seconds=perf_counter() - started)
         return {
             outer_key: result[inner_key]
             for inner_key, outer_key in self._output_map.items()
@@ -90,7 +95,9 @@ class _GraphNodeFn:
     async def ainvoke(self, state: dict) -> dict:
         """Async twin of ``invoke`` using the inner graph's ``ainvoke``."""
         inner_state = self._outer_state(state)
+        started = perf_counter()
         result = await self._compiled_graph().ainvoke(inner_state)
+        self._node.record_run(elapsed_seconds=perf_counter() - started)
         return {
             outer_key: result[inner_key]
             for inner_key, outer_key in self._output_map.items()
@@ -177,6 +184,7 @@ class GraphNode(AbstractNode):
             output_map=self.output_map,
             params=self.params,
             llm=llm,
+            node=self,
         )
 
     def updated(self, **changes: object) -> Self:
@@ -200,7 +208,7 @@ class GraphNode(AbstractNode):
                     f"unsupported fields: {sorted(set(changes))}; supported: "
                     f"{sorted(allowed)}"
                 )
-        return type(self)(
+        rebuilt = type(self)(
             name=changes.get("name", self.name),
             description=changes.get("description", self.description),
             prompt=changes.get("prompt", self.prompt),
@@ -208,6 +216,8 @@ class GraphNode(AbstractNode):
             input_map=self.input_map,
             output_map=self.output_map,
         )
+        self._carry_stats(rebuilt)
+        return rebuilt
 
     def to_dict(self) -> dict:
         """Type-tagged JSON-ready dict (``"type": "graph"``).

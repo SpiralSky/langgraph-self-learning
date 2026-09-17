@@ -50,6 +50,9 @@ class BareNode:
         self.name = name
         self.description = description
         self.prompt = prompt
+        self.run_counts = 0
+        self.output_tokens = OnlineStats()
+        self.output_time = OnlineStats()
 
     def get_node(self, llm):
         raise NotImplementedError
@@ -97,16 +100,14 @@ def test_add_returns_str_id_distinct_per_add():
     assert len(coll) == 2
 
 
-def test_get_returns_copy_and_raises_on_unknown():
+def test_get_returns_reference_and_raises_on_unknown():
     coll = NodeCollection()
     node = TextNode("n", "d", "p")
     node_id = coll.add(node)
     gotten = coll.get(node_id)
-    assert gotten is not node
-    assert gotten.name == "n"
-    gotten.description = "mutated"
-    assert coll.get(node_id).description == "d"
-    assert coll.records()[0].description == "d"
+    assert gotten is node
+    assert coll.get(node_id) is node
+    assert coll.get(node_id).name == "n"
     with pytest.raises(KeyError):
         coll.get("missing")
 
@@ -609,14 +610,14 @@ class _FailOnEmbedder(FakeEmbedder):
         return super().__call__(text)
 
 
-def test_update_prompt_only_keeps_id_and_bookkeeping_and_get_bumps(clock):
+def test_update_inplace_prompt_only_keeps_id_and_bookkeeping_and_get_bumps(clock):
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "say {topic}", params={"topic": str}))
     coll.pin(node_id)
     coll.get(node_id)
     before = next(r for r in coll.records())
 
-    coll.update(node_id, prompt="say it loudly {topic}")
+    coll.update_inplace(node_id, prompt="say it loudly {topic}")
 
     after = next(r for r in coll.records())
     assert after.id == node_id
@@ -631,32 +632,32 @@ def test_update_prompt_only_keeps_id_and_bookkeeping_and_get_bumps(clock):
     assert coll.records()[0].use_counts == 2
 
 
-def test_update_never_bumps(clock):
+def test_update_inplace_never_bumps(clock):
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
     for _ in range(3):
-        coll.update(node_id, description="d2")
+        coll.update_inplace(node_id, description="d2")
     rec = coll.records()[0]
     assert rec.use_counts == 0
     assert rec.last_used_at is None
 
 
-def test_update_name_description_change_reembeds():
+def test_update_inplace_name_description_change_reembeds():
     table = {txt("n", "d"): VX, txt("n", "d2"): VY, "q": VY}
     coll = NodeCollection(embedder=FakeEmbedder(table))
     node_id = coll.add(TextNode("n", "d", "p"))
 
-    coll.update(node_id, description="d2")
+    coll.update_inplace(node_id, description="d2")
 
     assert coll._vector_collection.count() == 1
     assert [r.name for r in coll.semantic_search("q", limit=5)] == ["n"]
 
 
-def test_update_params_writes_change_revalidates():
+def test_update_inplace_params_writes_change_revalidates():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
 
-    coll.update(
+    coll.update_inplace(
         node_id,
         params={"topic": str},
         prompt="Do {topic}",
@@ -669,79 +670,79 @@ def test_update_params_writes_change_revalidates():
     assert updated.writes == {"result": "response"}
 
 
-def test_update_orphan_placeholder_raises_and_entry_unchanged():
+def test_update_inplace_orphan_placeholder_raises_and_entry_unchanged():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "say {topic}", params={"topic": str}))
 
     with pytest.raises(ValueError, match="not declared in params"):
-        coll.update(node_id, prompt="Do {missing}", params={"topic": str})
+        coll.update_inplace(node_id, prompt="Do {missing}", params={"topic": str})
 
     untouched = coll.snapshot()[0]
     assert untouched.prompt == "say {topic}"
     assert untouched.params == {"topic": str}
 
 
-def test_update_empty_name_raises_and_entry_unchanged():
+def test_update_inplace_empty_name_raises_and_entry_unchanged():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
 
     with pytest.raises(ValueError, match="non-empty"):
-        coll.update(node_id, name="")
+        coll.update_inplace(node_id, name="")
 
     assert coll.snapshot()[0].name == "n"
 
 
-def test_update_and_replace_unknown_id_raise_key_error():
+def test_update_inplace_and_replace_unknown_id_raise_key_error():
     coll = NodeCollection()
     with pytest.raises(KeyError):
-        coll.update("missing", name="x")
+        coll.update_inplace("missing", name="x")
     with pytest.raises(KeyError):
         coll.replace("missing", TextNode("x", "d", "p"))
 
 
-def test_update_requires_updated_method():
+def test_update_inplace_requires_updated_method():
     coll = NodeCollection()
     node_id = coll.add(BareNode("n"))
     with pytest.raises(TypeError, match="replace()"):
-        coll.update(node_id, description="x")
+        coll.update_inplace(node_id, description="x")
 
 
-def test_update_bogus_kwarg_raises_type_error():
+def test_update_inplace_bogus_kwarg_raises_type_error():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
     with pytest.raises(TypeError):
-        coll.update(node_id, bogus=1)
+        coll.update_inplace(node_id, bogus=1)
 
 
-def test_update_zero_kwargs_is_noop(clock):
+def test_update_inplace_zero_kwargs_is_noop(clock):
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
-    coll.update(node_id)
+    coll.update_inplace(node_id)
     rec = coll.records()[0]
     assert rec.id == node_id
     assert rec.use_counts == 0
     assert rec.last_used_at is None
 
 
-def test_update_reembeds_previously_unembedded_entry():
+def test_update_inplace_reembeds_previously_unembedded_entry():
     table = {txt("n", "d2"): VY, "q": VY}
     coll = NodeCollection(embedder=FakeEmbedder(table))
     node_id = coll.add(TextNode("n", "d", "p"))
     assert coll._vector_collection.count() == 0
 
-    coll.update(node_id, description="d2")
+    coll.update_inplace(node_id, description="d2")
 
     assert coll._vector_collection.count() == 1
     assert [r.name for r in coll.semantic_search("q", limit=5)] == ["n"]
 
 
-def test_update_embedder_failure_keeps_change_and_degrades():
+def test_update_inplace_embedder_failure_keeps_change_and_degrades():
     table = {txt("n", "d"): VX, "q": VX}
     coll = NodeCollection(embedder=_FailOnEmbedder(table, fail_on=txt("n", "d2")))
     node_id = coll.add(TextNode("n", "d", "p"))
     assert coll._vector_collection.count() == 1
 
-    coll.update(node_id, description="d2")
+    coll.update_inplace(node_id, description="d2")
 
     assert coll.snapshot()[0].description == "d2"
     assert coll._vector_collection.count() == 0
@@ -811,7 +812,7 @@ def test_replace_validates_empty_name():
 
 
 # ---------------------------------------------------------------------------
-# run telemetry — OnlineStats + record_run / restore_stats.
+# run telemetry — OnlineStats + node-owned stats (records derive from node).
 # ---------------------------------------------------------------------------
 
 
@@ -868,11 +869,16 @@ def test_online_stats_round_trip_single_value_continues():
     assert restored.std is not None
 
 
-def test_record_run_bumps_counts_and_updates_stats():
+def _record_node(coll, node_id, *, tokens=None, elapsed_seconds=None):
+    """Record a run on the stored node via the reference getter."""
+    coll.get(node_id).record_run(tokens=tokens, elapsed_seconds=elapsed_seconds)
+
+
+def test_records_derive_run_stats_from_stored_node():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
-    coll.record_run(node_id, tokens=10, elapsed_seconds=0.5)
-    coll.record_run(node_id, tokens=20, elapsed_seconds=1.5)
+    _record_node(coll, node_id, tokens=10, elapsed_seconds=0.5)
+    _record_node(coll, node_id, tokens=20, elapsed_seconds=1.5)
 
     rec = coll.records()[0]
     assert rec.run_counts == 2
@@ -884,12 +890,12 @@ def test_record_run_bumps_counts_and_updates_stats():
     assert rec.time_std == pytest.approx(math.sqrt(0.5))
 
 
-def test_record_run_none_metrics_skip_that_stat():
+def test_records_reflect_none_metrics_skip_that_stat():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
-    coll.record_run(node_id)
-    coll.record_run(node_id, tokens=5)
-    coll.record_run(node_id, elapsed_seconds=2.0)
+    _record_node(coll, node_id)
+    _record_node(coll, node_id, tokens=5)
+    _record_node(coll, node_id, elapsed_seconds=2.0)
 
     rec = coll.records()[0]
     assert rec.run_counts == 3
@@ -899,43 +905,24 @@ def test_record_run_none_metrics_skip_that_stat():
     assert rec.time_mean == pytest.approx(2.0)
 
 
-def test_record_run_unknown_id_raises_key_error():
-    coll = NodeCollection()
-    with pytest.raises(KeyError):
-        coll.record_run("missing", tokens=1)
-
-
-def test_record_run_rejects_invalid_metrics_without_mutation():
+def test_records_derive_empty_stats_by_default():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
-    for bad in (-1, -0.5, float("nan"), float("inf"), float("-inf"), "abc"):
-        with pytest.raises(ValueError):
-            coll.record_run(node_id, tokens=bad)
-        with pytest.raises(ValueError):
-            coll.record_run(node_id, elapsed_seconds=bad)
     rec = coll.records()[0]
+    assert rec.id == node_id
     assert rec.run_counts == 0
     assert rec.tokens_count == 0
+    assert rec.tokens_mean is None
     assert rec.time_count == 0
+    assert rec.time_mean is None
 
 
-def test_record_run_accepts_numeric_strings():
-    coll = NodeCollection()
-    node_id = coll.add(TextNode("n", "d", "p"))
-    coll.record_run(node_id, tokens="10", elapsed_seconds="1.5")
-    rec = coll.records()[0]
-    assert rec.run_counts == 1
-    assert rec.tokens_mean == pytest.approx(10.0)
-    assert rec.time_mean == pytest.approx(1.5)
-
-
-def test_get_search_semantic_never_mutate_run_stats():
+def test_get_search_semantic_never_mutate_node_stats():
     table = {txt("n", "d"): VX, "q": VX}
     coll = NodeCollection(embedder=FakeEmbedder(table))
     node_id = coll.add(TextNode("n", "d", "p"))
-    coll.record_run(node_id, tokens=10, elapsed_seconds=1.0)
+    _record_node(coll, node_id, tokens=10, elapsed_seconds=1.0)
 
-    coll.get(node_id)
     coll.search(query="n")
     coll.get_by_name("n")
     coll.semantic_search("q", limit=5)
@@ -948,217 +935,119 @@ def test_get_search_semantic_never_mutate_run_stats():
     assert rec.tokens_mean == pytest.approx(10.0)
 
 
-def test_update_replace_preserve_run_stats():
+def test_update_inplace_preserves_node_stats():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
-    coll.record_run(node_id, tokens=10, elapsed_seconds=1.0)
+    _record_node(coll, node_id, tokens=10, elapsed_seconds=1.0)
 
-    coll.update(node_id, description="d2")
-    coll.replace(node_id, TextNode("renamed", "d2", "p2"))
+    coll.update_inplace(node_id, description="d2")
+    node = coll.get(node_id)
 
     rec = coll.records()[0]
-    assert rec.name == "renamed"
+    assert rec.description == "d2"
     assert rec.run_counts == 1
     assert rec.tokens_count == 1
     assert rec.time_count == 1
     assert rec.tokens_mean == pytest.approx(10.0)
     assert rec.time_mean == pytest.approx(1.0)
 
+    node.record_run(tokens=30, elapsed_seconds=0.5)
+    assert coll.records()[0].run_counts == 2
 
-def test_restore_stats_overwrites_and_is_idempotent():
+
+def test_update_inplace_reset_stats_zeroes_node_stats():
     coll = NodeCollection()
     node_id = coll.add(TextNode("n", "d", "p"))
-    tokens = OnlineStats()
-    for value in (3.0, 4.0):
-        tokens.update(value)
-    time = OnlineStats()
-    time.update(0.25)
+    _record_node(coll, node_id, tokens=10, elapsed_seconds=1.0)
 
-    coll.restore_stats(node_id, run_counts=7, tokens=tokens, time=time)
-    rec = coll.records()[0]
-    assert rec.run_counts == 7
-    assert rec.tokens_count == 2
-    assert rec.tokens_mean == pytest.approx(3.5)
-    assert rec.tokens_std == pytest.approx(math.sqrt(0.5))
-    assert rec.time_count == 1
-    assert rec.time_mean == pytest.approx(0.25)
-
-    coll.restore_stats(node_id, run_counts=7, tokens=tokens, time=time)
-    assert coll.records()[0].run_counts == 7
-
-
-def test_restore_stats_unknown_and_negative():
-    coll = NodeCollection()
-    node_id = coll.add(TextNode("n", "d", "p"))
-    empty = OnlineStats()
-    with pytest.raises(KeyError):
-        coll.restore_stats("missing", run_counts=0, tokens=empty, time=empty)
-    with pytest.raises(ValueError):
-        coll.restore_stats(node_id, run_counts=-1, tokens=empty, time=empty)
-    assert coll.records()[0].run_counts == 0
-
-
-# ---------------------------------------------------------------------------
-# get_callable + recording LLM proxy — output telemetry on successful runs.
-# ---------------------------------------------------------------------------
-
-
-class _FakeMessage:
-    """AIMessage stand-in carrying ``content`` and optional ``usage_metadata``."""
-
-    def __init__(self, content, tokens=None):
-        self.content = content
-        self.usage_metadata = (
-            {"output_tokens": tokens} if tokens is not None else None
-        )
-
-
-class _FakeLLM:
-    """Sync+async LLM stand-in; raises ``error`` (if set) on call."""
-
-    def __init__(self, tokens=None, error=None):
-        self._tokens = tokens
-        self._error = error
-
-    def _respond(self):
-        if self._error is not None:
-            raise self._error
-        return _FakeMessage("hi", self._tokens)
-
-    def invoke(self, prompt):
-        return self._respond()
-
-    async def ainvoke(self, prompt):
-        return self._respond()
-
-
-def _text_node(name, prompt):
-    """A TextNode reading one ``user_message`` string param."""
-    return TextNode(name, "d", prompt, params={"user_message": str})
-
-
-def test_get_callable_records_tokens_and_time_on_run():
-    coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    callable_ = coll.get_callable(node_id, _FakeLLM(tokens=12))
-
-    callable_.invoke({"user_message": "hi"})
+    coll.update_inplace(node_id, description="d2", reset_stats=True)
 
     rec = coll.records()[0]
-    assert rec.run_counts == 1
-    assert rec.tokens_count == 1
-    assert rec.tokens_mean == pytest.approx(12.0)
-    assert rec.time_count == 1
-    assert rec.time_mean > 0
-
-
-def test_get_callable_accumulates_across_repeated_runs():
-    coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    callable_ = coll.get_callable(node_id, _FakeLLM(tokens=4))
-
-    callable_.invoke({"user_message": "hi"})
-    callable_.invoke({"user_message": "hi"})
-    callable_.invoke({"user_message": "hi"})
-
-    rec = coll.records()[0]
-    assert rec.run_counts == 3
-    assert rec.tokens_count == 3
-    assert rec.tokens_mean == pytest.approx(4.0)
-
-
-def test_get_callable_no_usage_metadata_records_time_only():
-    coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    callable_ = coll.get_callable(node_id, _FakeLLM(tokens=None))
-
-    callable_.invoke({"user_message": "hi"})
-
-    rec = coll.records()[0]
-    assert rec.run_counts == 1
-    assert rec.tokens_count == 0
-    assert rec.tokens_mean is None
-    assert rec.time_count == 1
-    assert rec.time_mean > 0
-
-
-def test_get_callable_exception_propagates_without_recording():
-    coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    callable_ = coll.get_callable(node_id, _FakeLLM(error=RuntimeError("boom")))
-
-    with pytest.raises(RuntimeError, match="boom"):
-        callable_.invoke({"user_message": "hi"})
-
-    rec = coll.records()[0]
+    assert rec.description == "d2"
     assert rec.run_counts == 0
     assert rec.tokens_count == 0
+    assert rec.tokens_mean is None
     assert rec.time_count == 0
+    assert rec.time_mean is None
 
 
-def test_get_callable_nested_graph_sums_tokens_one_bump():
-    inner = Graph()
-    inner.add_node("a", _text_node("a", "Gen {user_message}"))
-    inner.add_node("b", _text_node("b", "Sum {user_message}"))
-    inner.add_edge("e1", START, "a")
-    inner.add_edge("e2", "a", "b")
-    inner.add_edge("e3", "b", END)
-    sub = GraphNode(
-        "sub",
-        "d",
-        "p",
-        inner,
-        input_map={"user_message": "user_message"},
-        output_map={"response": "response"},
-    )
-
+def test_edit_returns_validated_copy_and_leaves_store_untouched():
     coll = NodeCollection()
-    node_id = coll.add(sub)
-    callable_ = coll.get_callable(node_id, _FakeLLM(tokens=7))
+    node_id = coll.add(TextNode("n", "d", "say {topic}", params={"topic": str}))
+    _record_node(coll, node_id, tokens=7, elapsed_seconds=0.4)
 
-    callable_.invoke({"user_message": "hi"})
+    copy = coll.edit(node_id, description="d2", prompt="Do {topic}")
+
+    assert copy.name == "n"
+    assert copy.description == "d2"
+    assert copy.prompt == "Do {topic}"
+    assert copy.params == {"topic": str}
+    assert copy.run_counts == 1
+    assert copy.output_tokens.mean == pytest.approx(7.0)
+    assert copy is not coll.get(node_id)
+    rec = coll.records()[0]
+    assert rec.description == "d"
+    assert coll.snapshot()[0].prompt == "say {topic}"
+    assert rec.run_counts == 1
+
+    coll.replace(node_id, copy)
+    assert coll.records()[0].description == "d2"
+
+
+def test_edit_unknown_id_and_missing_updated_raise():
+    coll = NodeCollection()
+    with pytest.raises(KeyError):
+        coll.edit("missing", name="x")
+    node_id = coll.add(BareNode("n"))
+    with pytest.raises(TypeError, match="replace()"):
+        coll.edit(node_id, description="x")
+
+
+def test_replace_swaps_incoming_nodes_own_stats():
+    coll = NodeCollection()
+    node_id = coll.add(TextNode("n", "d", "p"))
+    _record_node(coll, node_id, tokens=10, elapsed_seconds=1.0)
+
+    replacement = TextNode("renamed", "d2", "p2")
+    replacement.record_run(tokens=5, elapsed_seconds=0.25)
+    coll.replace(node_id, replacement)
 
     rec = coll.records()[0]
+    assert rec.name == "renamed"
     assert rec.run_counts == 1
     assert rec.tokens_count == 1
-    assert rec.tokens_mean == pytest.approx(14.0)
-    assert rec.time_count == 1
-    assert rec.time_mean > 0
+    assert rec.tokens_mean == pytest.approx(5.0)
+    assert rec.time_mean == pytest.approx(0.25)
 
 
-def test_get_callable_unknown_id_raises_and_no_use_bump():
+# ---------------------------------------------------------------------------
+# reference get + use/recency bookkeeping.
+# ---------------------------------------------------------------------------
+
+
+def test_get_returns_same_object_across_calls():
     coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    known_use = coll.records()[0].use_counts
-
-    with pytest.raises(KeyError):
-        coll.get_callable("missing", _FakeLLM(tokens=1))
-
-    assert coll.records()[0].use_counts == known_use
+    node_id = coll.add(TextNode("n", "d", "p"))
+    assert coll.get(node_id) is coll.get(node_id)
 
 
-def test_get_callable_does_not_bump_use_counts():
+def test_get_still_bumps_use_and_recency_not_run_stats():
     coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    callable_ = coll.get_callable(node_id, _FakeLLM(tokens=5))
-
-    callable_.invoke({"user_message": "hi"})
-
+    node_id = coll.add(TextNode("n", "d", "p"))
     rec = coll.records()[0]
     assert rec.use_counts == 0
-    assert rec.run_counts == 1
+    assert rec.last_used_at is None
+
+    coll.get(node_id)
+    coll.get(node_id)
+
+    bumped = coll.records()[0]
+    assert bumped.use_counts == 2
+    assert bumped.last_used_at is not None
+    assert bumped.run_counts == 0
 
 
-async def test_get_callable_ainvoke_records_async():
+def test_get_unknown_id_raises_key_error():
     coll = NodeCollection()
-    node_id = coll.add(_text_node("n", "Gen {user_message}"))
-    callable_ = coll.get_callable(node_id, _FakeLLM(tokens=9))
-
-    await callable_.ainvoke({"user_message": "hi"})
-
-    rec = coll.records()[0]
-    assert rec.run_counts == 1
-    assert rec.tokens_count == 1
-    assert rec.tokens_mean == pytest.approx(9.0)
-    assert rec.time_count == 1
-    assert rec.time_mean > 0
+    with pytest.raises(KeyError):
+        coll.get("missing")

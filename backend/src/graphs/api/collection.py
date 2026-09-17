@@ -14,8 +14,6 @@ query and ranks by similarity. Persistence (vectors included) stays external.
 
 from __future__ import annotations
 
-import math
-import time
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -27,130 +25,8 @@ import chromadb
 from graphs.api.stats import OnlineStats
 from graphs.nodes.base import GraphNode
 
-
-def _validate_measurement(value: object, *, name: str) -> float:
-    """Coerce a run measurement to a finite, non-negative float.
-
-    :raises ValueError: if ``value`` is not a number, is not finite, or is
-        negative (incl. NaN/±inf).
-    """
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a number") from exc
-    if not math.isfinite(number):
-        raise ValueError(f"{name} must be finite")
-    if number < 0:
-        raise ValueError(f"{name} must be non-negative")
-    return number
-
 _DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 _default_embedding_model: object | None = None
-
-
-class _RecordingLLM:
-    """Thin ``Runnable`` proxy that times calls and reads output-token usage.
-
-    Wraps a real LLM and observes the calls node callables make through it
-    (including nested calls, e.g. a ``GraphNode`` threading the same llm to
-    inner nodes): every ``invoke``/``ainvoke`` adds its tokens and elapsed
-    time to per-run accumulators. It exposes ``invoke`` / ``ainvoke`` (the
-    only entry points node callables use) and transparently delegates any
-    other attribute access to the wrapped LLM via ``__getattr__``.
-
-    Tokens are read from ``result.usage_metadata["output_tokens"]`` when
-    present (and numeric); missing metadata yields no token accumulation
-    (time-only recording). ``reset_run`` clears the accumulators at the start
-    of a top-level run; ``take_run`` returns them and resets.
-    """
-
-    def __init__(self, llm: object) -> None:
-        self._llm = llm
-        self._total_tokens: int = 0
-        self._run_elapsed: float = 0.0
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._llm, name)
-
-    def reset_run(self) -> None:
-        """Clear the per-run accumulators (call once per top-level run)."""
-        self._total_tokens = 0
-        self._run_elapsed = 0.0
-
-    def take_run(self) -> tuple[int | None, float]:
-        """Return ``(tokens | None, elapsed_seconds)`` and reset.
-
-        ``None`` tokens signal that no ``usage_metadata`` was observed (so
-        the caller records time only).
-        """
-        tokens = self._total_tokens or None
-        elapsed = self._run_elapsed
-        self.reset_run()
-        return tokens, elapsed
-
-    def _observe(self, elapsed: float, result: object) -> None:
-        self._run_elapsed += elapsed
-        metadata = getattr(result, "usage_metadata", None)
-        if isinstance(metadata, dict):
-            output_tokens = metadata.get("output_tokens")
-            if isinstance(output_tokens, (int, float)) and not isinstance(
-                output_tokens, bool
-            ):
-                self._total_tokens += int(output_tokens)
-
-    def invoke(self, *args: object, **kwargs: object) -> object:
-        start = time.perf_counter()
-        try:
-            result = self._llm.invoke(*args, **kwargs)
-        except BaseException:
-            raise
-        self._observe(time.perf_counter() - start, result)
-        return result
-
-    async def ainvoke(self, *args: object, **kwargs: object) -> object:
-        start = time.perf_counter()
-        try:
-            result = await self._llm.ainvoke(*args, **kwargs)
-        except BaseException:
-            raise
-        self._observe(time.perf_counter() - start, result)
-        return result
-
-
-class _TelemetryCallable:
-    """DualCallable wrapper that records run telemetry on success.
-
-    Resets the recording proxy accumulator, runs the wrapped node callable,
-    then reports tokens + elapsed time to the collection via ``record_run``.
-    Exceptions propagate and record nothing.
-    """
-
-    def __init__(
-        self,
-        *,
-        recorder: _RecordingLLM,
-        inner: object,
-        record: Callable,
-    ) -> None:
-        self._recorder = recorder
-        self._inner = inner
-        self._record = record
-
-    def _record_run(self) -> None:
-        tokens, elapsed = self._recorder.take_run()
-        self._record(tokens=tokens, elapsed_seconds=elapsed)
-
-    def invoke(self, state: dict, *args: object, **kwargs: object) -> dict:
-        self._recorder.reset_run()
-        result = self._inner.invoke(state, *args, **kwargs)
-        self._record_run()
-        return result
-
-    async def ainvoke(self, state: dict, *args: object, **kwargs: object) -> dict:
-        self._recorder.reset_run()
-        result = await self._inner.ainvoke(state, *args, **kwargs)
-        self._record_run()
-        return result
 
 
 def get_default_embedder() -> Callable[[str], list[float]]:
@@ -202,9 +78,6 @@ class _Entry:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_used_at: datetime | None = None
     embedded: bool = False
-    run_counts: int = 0
-    output_tokens: OnlineStats = field(default_factory=OnlineStats)
-    output_time: OnlineStats = field(default_factory=OnlineStats)
 
 
 class NodeCollection:
@@ -291,109 +164,27 @@ class NodeCollection:
             entry.embedded = False
 
     def get(self, node_id: str) -> GraphNode:
-        """Return a deep copy of the stored prototype, bumping use/recency.
+        """Return the live stored prototype by reference, bumping use/recency.
 
-        The stored prototype is read-only from outside: mutating the returned
-        copy never touches the store — use :meth:`update` / :meth:`replace`
-        to edit it.
+        This is the collection's own instance (no deep copy), so edits must
+        go through the API: :meth:`update_inplace` (validated rebuild in the
+        store), :meth:`edit` (validated copy, store untouched) or
+        :meth:`replace` (explicit commit). Mutating the returned object
+        outside those methods is unsupported.
 
         :raises KeyError: if ``node_id`` is unknown.
         """
         entry = self._entries[node_id]
         entry.use_counts += 1
         entry.last_used_at = datetime.now(UTC)
-        return deepcopy(entry.node)
+        return entry.node
 
-    def record_run(
+    def update_inplace(
         self,
         node_id: str,
         *,
-        tokens: object | None = None,
-        elapsed_seconds: object | None = None,
-    ) -> None:
-        """Record one execution outcome on the entry's run stats.
-
-        Bumps ``run_counts``; each non-``None`` measurement is validated
-        (finite, non-negative coerceable number) and folded into the
-        corresponding Welford accumulator. ``get`` / ``records`` never touch
-        these — they track runs, not store reads.
-
-        :param tokens: Output token count produced by the run.
-        :type tokens: object | None
-        :param elapsed_seconds: Wall-clock duration of the run.
-        :type elapsed_seconds: object | None
-
-        :raises KeyError: if ``node_id`` is unknown.
-        :raises ValueError: for NaN/infinite/negative measurements.
-        """
-        entry = self._entries[node_id]
-        tokens_value = (
-            None if tokens is None else _validate_measurement(tokens, name="tokens")
-        )
-        elapsed_value = (
-            None
-            if elapsed_seconds is None
-            else _validate_measurement(elapsed_seconds, name="elapsed_seconds")
-        )
-        entry.run_counts += 1
-        if tokens_value is not None:
-            entry.output_tokens.update(tokens_value)
-        if elapsed_value is not None:
-            entry.output_time.update(elapsed_value)
-
-    def restore_stats(
-        self,
-        node_id: str,
-        *,
-        run_counts: int,
-        tokens: OnlineStats,
-        time: OnlineStats,
-    ) -> None:
-        """Idempotently overwrite the entry's run telemetry.
-
-        Used by loaders (e.g. ``load_collection``) to re-attach persisted
-        stats to a freshly rebuilt entry.
-
-        :raises KeyError: if ``node_id`` is unknown.
-        :raises ValueError: if ``run_counts`` is negative.
-        """
-        entry = self._entries[node_id]
-        if run_counts < 0:
-            raise ValueError("run_counts must be non-negative")
-        entry.run_counts = run_counts
-        entry.output_tokens = tokens
-        entry.output_time = time
-
-    def get_callable(self, node_id: str, llm: object) -> _TelemetryCallable:
-        """Return an instrumented ``DualCallable`` for a stored node.
-
-        Deep-copies the stored prototype, wraps ``llm`` in a recording proxy
-        that sums output tokens (from ``usage_metadata``) and elapsed time
-        across the whole run (including nested ``GraphNode`` calls), and
-        returns a callable that reports those to :meth:`record_run` on every
-        successful top-level run. ``use_counts`` is NOT bumped here — that is
-        reserved for :meth:`get`.
-
-        :raises KeyError: if ``node_id`` is unknown.
-        """
-        entry = self._entries[node_id]
-        node = deepcopy(entry.node)
-        recorder = _RecordingLLM(llm)
-        inner = node.get_node(recorder)
-        record = lambda tokens, elapsed_seconds: self.record_run(  # noqa: E731
-            node_id, tokens=tokens, elapsed_seconds=elapsed_seconds
-        )
-        return _TelemetryCallable(recorder=recorder, inner=inner, record=record)
-
-    def update(
-        self,
-        node_id: str,
-        *,
-        name: str | None = None,
-        description: str | None = None,
-        prompt: str | None = None,
-        params: dict[str, type] | None = None,
-        writes: dict[str, str] | None = None,
+        reset_stats: bool = False,
+        **changes: object,
     ) -> None:
         """Field-level edit of the stored prototype; no use/recency bump.
 
@@ -401,6 +192,9 @@ class NodeCollection:
         empty call is a no-op. The new instance is rebuilt and validated
         BEFORE it replaces the stored one, so a failed edit (e.g. an orphan
         prompt placeholder) leaves the store unchanged.
+
+        Run stats are carried onto the rebuilt node by ``updated()`` and
+        therefore preserved — pass ``reset_stats=True`` to zero them instead.
 
         :raises KeyError: if ``node_id`` is unknown.
         :raises TypeError: if the stored node has no ``updated()``.
@@ -412,27 +206,44 @@ class NodeCollection:
                 "stored node has no updated(); use replace() to swap in a new prototype"
             )
         changes = {
-            key: value
-            for key, value in (
-                ("name", name),
-                ("description", description),
-                ("prompt", prompt),
-                ("params", params),
-                ("writes", writes),
-            )
-            if value is not None
+            key: value for key, value in changes.items() if value is not None
         }
         if not changes:
             return
+        new_node = updated(**changes)
+        if reset_stats:
+            new_node.run_counts = 0
+            new_node.output_tokens = OnlineStats()
+            new_node.output_time = OnlineStats()
         old_node = entry.node
-        entry.node = updated(**changes)
+        entry.node = new_node
         self._sync_embedding(entry, old_node)
+
+    def edit(self, node_id: str, **changes: object) -> GraphNode:
+        """Return a validated copy of the stored prototype; store untouched.
+
+        Rebuilds a new instance via the stored node's ``updated()`` (so all
+        provided values are re-validated and run stats are carried over) and
+        returns it WITHOUT touching the store. Commit the result explicitly
+        with :meth:`replace` when ready.
+
+        :raises KeyError: if ``node_id`` is unknown.
+        :raises TypeError: if the stored node has no ``updated()``.
+        """
+        entry = self._entries[node_id]
+        updated = getattr(entry.node, "updated", None)
+        if updated is None:
+            raise TypeError(
+                "stored node has no updated(); use replace() to swap in a new prototype"
+            )
+        return updated(**changes)
 
     def replace(self, node_id: str, new_node: GraphNode) -> None:
         """Swap a new prototype under the same id; no use/recency bump.
 
         Bookkeeping (``id``, ``use_counts``, ``pinned``, ``created_at``,
-        ``last_used_at``) is preserved.
+        ``last_used_at``) is preserved. The incoming node's own run stats
+        come with it; nothing is carried over from the outgoing prototype.
 
         :raises KeyError: if ``node_id`` is unknown.
         :raises ValueError: if ``new_node.name`` is empty.
@@ -618,21 +429,22 @@ class NodeCollection:
         return node_id in self._entries
 
     def _record(self, entry: _Entry) -> NodeCollectionRecord:
+        node = entry.node
         return NodeCollectionRecord(
             id=entry.id,
-            name=entry.node.name,
-            description=entry.node.description,
+            name=node.name,
+            description=node.description,
             use_counts=entry.use_counts,
             pinned=entry.pinned,
             created_at=entry.created_at,
             last_used_at=entry.last_used_at,
-            run_counts=entry.run_counts,
-            tokens_count=entry.output_tokens.count,
-            tokens_mean=entry.output_tokens.mean if entry.output_tokens.count else None,
-            tokens_std=entry.output_tokens.std,
-            time_count=entry.output_time.count,
-            time_mean=entry.output_time.mean if entry.output_time.count else None,
-            time_std=entry.output_time.std,
+            run_counts=node.run_counts,
+            tokens_count=node.output_tokens.count,
+            tokens_mean=node.output_tokens.mean if node.output_tokens.count else None,
+            tokens_std=node.output_tokens.std,
+            time_count=node.output_time.count,
+            time_mean=node.output_time.mean if node.output_time.count else None,
+            time_std=node.output_time.std,
         )
 
     def _prune(self) -> None:

@@ -401,14 +401,15 @@ def test_collection_dump_load_preserves_stats(tmp_path):
 
     path = tmp_path / "collection.json"
     coll = NodeCollection(embedder=DummyEmbedder())
-    node_id = coll.add(TextNode("alpha", "d1", "p1"))
-    tokens = OnlineStats()
-    for value in (10.0, 20.0):
-        tokens.update(value)
-    times = OnlineStats()
-    for value in (0.1, 0.3):
-        times.update(value)
-    coll.restore_stats(node_id, run_counts=5, tokens=tokens, time=times)
+    alpha = TextNode("alpha", "d1", "p1")
+    alpha.output_tokens = OnlineStats.from_dict(
+        {"count": 2, "mean": 15.0, "std": 7.0710678118654755}
+    )
+    alpha.output_time = OnlineStats.from_dict(
+        {"count": 2, "mean": 0.2, "std": 0.14142135623730953}
+    )
+    alpha.run_counts = 5
+    coll.add(alpha)
     coll.add(TextNode("beta", "d2", "p2"))
 
     storage_mod.dump_collection(coll, path)
@@ -432,19 +433,22 @@ def test_collection_dump_load_stats_welford_continuity(tmp_path):
 
     path = tmp_path / "collection.json"
     coll = NodeCollection(embedder=DummyEmbedder())
-    node_id = coll.add(TextNode("alpha", "d1", "p1"))
+    alpha = TextNode("alpha", "d1", "p1")
     tokens = OnlineStats()
     for value in (10.0, 20.0):
         tokens.update(value)
     times = OnlineStats()
     times.update(0.5)
-    coll.restore_stats(node_id, run_counts=2, tokens=tokens, time=times)
+    alpha.output_tokens = tokens
+    alpha.output_time = times
+    alpha.run_counts = 2
+    coll.add(alpha)
 
     storage_mod.dump_collection(coll, path)
     restored = storage_mod.load_collection(path, embedder=DummyEmbedder())
     rid = restored.records()[0].id
 
-    restored.record_run(rid, tokens=30.0, elapsed_seconds=0.5)
+    restored.get(rid).record_run(tokens=30.0, elapsed_seconds=0.5)
 
     rec = restored.records()[0]
     assert rec.run_counts == 3
@@ -468,6 +472,29 @@ def test_collection_load_legacy_format_defaults_empty_stats(tmp_path):
     assert rec.tokens_mean is None
     assert rec.time_count == 0
     assert rec.time_mean is None
+
+
+def test_collection_load_rejects_negative_run_counts(tmp_path):
+    path = tmp_path / "collection.json"
+    node = TextNode("alpha", "d", "p")
+    storage_mod.write_json(
+        path,
+        {
+            "nodes": [
+                {
+                    "node": node.to_dict(),
+                    "stats": {
+                        "run_counts": -1,
+                        "tokens": {"count": 0, "mean": None, "std": None},
+                        "time": {"count": 0, "mean": None, "std": None},
+                    },
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="run_counts"):
+        storage_mod.load_collection(path, embedder=DummyEmbedder())
 
 
 def test_collection_dump_stats_are_json_serializable(tmp_path):

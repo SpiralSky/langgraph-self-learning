@@ -17,14 +17,23 @@ from graphs.nodes.text_node import TextNode
 class FakeLLM:
     """Returns ``{content}:{prompt}`` so tests can tell which LLM ran."""
 
-    def __init__(self, content="ok"):
+    def __init__(self, content="ok", tokens=None):
         self.content = content
+        self.tokens = tokens
+
+    def _result(self, content):
+        if self.tokens is None:
+            return type("R", (), {"content": content})()
+        return type("R", (), {
+            "content": content,
+            "usage_metadata": {"output_tokens": self.tokens},
+        })()
 
     def invoke(self, prompt):
-        return type("R", (), {"content": f"{self.content}:{prompt}"})()
+        return self._result(f"{self.content}:{prompt}")
 
     async def ainvoke(self, prompt):
-        return type("R", (), {"content": f"a:{prompt}"})()
+        return self._result(f"a:{prompt}")
 
 
 def _text_node(node_id, name, prompt, *, params=None, writes=None):
@@ -223,3 +232,55 @@ def test_updated_prompt_placeholder_checked_against_input_map():
     node = _sub_node()
     with pytest.raises(ValueError, match="not declared in params"):
         node.updated(prompt="Use {ghost_key}")
+
+
+# ---------------------------------------------------------------- run stats
+
+
+def test_graph_node_records_time_while_inner_nodes_self_record_tokens():
+    inner_text = _text_node(
+        "a", "inner alpha", "Gen {user_message}", params={"user_message": str}
+    )
+    inner = Graph()
+    inner.add_node("a", inner_text, llm=FakeLLM("I", tokens=9))
+    inner.add_edge("e1", START, "a")
+    inner.add_edge("e2", "a", END)
+    node = GraphNode(
+        "sub", "wraps the inner graph", "reusable subgraph", inner,
+        input_map={"user_message": "user_message"},
+        output_map={"response": "response"},
+    )
+    fn = node.get_node(FakeLLM("P"))
+    fn.invoke({"user_message": "hi"})
+    fn.invoke({"user_message": "hi"})
+
+    assert node.run_counts == 2
+    assert node.output_tokens.count == 0
+    assert node.output_time.count == 2
+    assert node.output_time.mean > 0.0
+    assert inner_text.run_counts == 2
+    assert inner_text.output_tokens.count == 2
+    assert inner_text.output_tokens.mean == 9.0
+    assert inner_text.output_time.count == 2
+
+
+async def test_graph_node_ainvoke_records_time_once():
+    inner = _single_output_subgraph(llm="I")
+    node = GraphNode(
+        "sub", "wraps the inner graph", "reusable subgraph", inner,
+        input_map={"user_message": "user_message"},
+        output_map={"response": "response"},
+    )
+    result = await node.get_node(FakeLLM("P")).ainvoke({"user_message": "hi"})
+    assert result == {"response": "I:Gen hi"}
+    assert node.run_counts == 1
+    assert node.output_time.count == 1
+
+
+def test_graph_node_updated_preserves_run_stats():
+    node = _sub_node()
+    node.get_node(FakeLLM("P")).invoke({"user_message": "hi"})
+    renamed = node.updated(name="renamed")
+    assert renamed.run_counts == 1
+    assert renamed.output_time.count == 1
+    assert renamed.output_time.mean > 0.0

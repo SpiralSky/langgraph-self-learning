@@ -10,6 +10,7 @@ import pytest
 import yaml
 from langchain_core.messages import AIMessage
 
+from graphs.api.collection import NodeCollection
 from graphs.behaviors import BehaviorGroup, BehaviorPoint
 from graphs.generator import (
     BUILDER_TOOL_DEFS,
@@ -21,6 +22,14 @@ from graphs.graph import Graph
 from graphs.nodes.text_node import TextNode
 from graphs.nodes.tool_node import ToolCallNode
 from graphs.tools import ToolRegistry
+
+
+def _embed(text: str) -> list[float]:
+    return [0.1, 0.2, 0.3]
+
+
+def _empty_collection() -> NodeCollection:
+    return NodeCollection(embedder=_embed)
 
 
 def tool_call(call_id, name, args):
@@ -157,7 +166,7 @@ def test_build_state_model_unions_params_writes_and_defaults():
 
 def test_bind_builder_tools_attached():
     llm = GeneratorLLM([calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
     fn.invoke({"user_message": "hi"})
     assert llm.bound_tools == BUILDER_TOOL_DEFS
 
@@ -167,7 +176,7 @@ def test_bind_builder_tools_attached():
 
 def test_single_pass_spec_builds_and_runs_nested():
     llm = GeneratorLLM([calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
     result = fn.invoke({"user_message": "hi"})
 
     assert result == {"response": "inner:Answer hi"}
@@ -179,7 +188,7 @@ def test_single_pass_spec_builds_and_runs_nested():
 
 async def test_async_ainvoke_runs_nested():
     llm = GeneratorLLM([calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
     result = await fn.ainvoke({"user_message": "hi"})
     assert result == {"response": "inner:Answer hi"}
 
@@ -197,7 +206,7 @@ def test_invalid_spec_retries_with_feedback_then_succeeds():
         tool_call("c2", "add_edge", {"source": "x", "target": "ghost"}),
     )
     llm = GeneratorLLM([bad, calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     assert fn.invoke({"user_message": "hi"}) == {"response": "inner:Answer hi"}
     assert len(llm.gen_prompts) == 2
@@ -212,7 +221,7 @@ def test_persistent_invalid_raises_with_aggregate_errors():
         tool_call("c1", "add_node", {"id": "x", "type": "bogus", "name": "n", "description": "d"})
     )
     llm = GeneratorLLM([bad] * 4)
-    fn = GeneratorNode("gen", "d", behaviors=[], retries=3, registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], retries=3, registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     with pytest.raises(RuntimeError, match="after 4 attempts") as exc_info:
         fn.invoke({"user_message": "hi"})
@@ -223,7 +232,7 @@ def test_persistent_invalid_raises_with_aggregate_errors():
 
 def test_malformed_response_retries_then_succeeds():
     llm = GeneratorLLM([AIMessage(content="not json"), calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     assert fn.invoke({"user_message": "hi"}) == {"response": "inner:Answer hi"}
     assert "not valid JSON" in llm.gen_prompts[1]
@@ -234,7 +243,7 @@ def test_unknown_builder_call_is_retry_feedback():
         content='{"calls": [{"name": "explode", "args": {}}]}'
     )
     llm = GeneratorLLM([bad, calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     fn.invoke({"user_message": "hi"})
     assert "unknown builder call 'explode'" in llm.gen_prompts[1]
@@ -250,7 +259,7 @@ def test_tool_node_path_runs_through_fake_registry():
         tool_call("c3", "add_edge", {"source": "t", "target": "END"}),
     ]
     llm = GeneratorLLM([calls_message(*spec)])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     assert fn.invoke({"user_message": "hi"}) == {"response": "echo:None"}
 
@@ -260,7 +269,7 @@ def test_unknown_tool_name_is_retry_feedback():
         tool_call("c1", "add_node", {"id": "t", "type": "tool", "name": "n", "description": "d", "tool": "nope"})
     )
     llm = GeneratorLLM([bad, calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     fn.invoke({"user_message": "hi"})
     assert "unknown tool 'nope'" in llm.gen_prompts[1]
@@ -275,7 +284,7 @@ def test_fixed_tool_args_rejected_with_feedback():
         )
     )
     llm = GeneratorLLM([bad, calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     fn.invoke({"user_message": "hi"})
     assert "fixed 'tool_args' are not supported" in llm.gen_prompts[1]
@@ -293,7 +302,7 @@ def test_inner_state_model_uses_declared_list_type():
         tool_call("c5", "add_edge", {"source": "b", "target": "END"}),
     ]
     llm = GeneratorLLM([calls_message(*spec)])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     fn.invoke({"user_message": "hi"})
     fields = fn.last_graph.state_model.model_fields
@@ -310,7 +319,7 @@ def test_behaviors_injected_as_objects_render_into_prompt():
         BehaviorGroup(title="Explain concepts", points=[BehaviorPoint(id="p1", text="be direct")])
     ]
     llm = GeneratorLLM([calls_message(*valid_text_calls())])
-    fn = GeneratorNode("gen", "d", behaviors=groups, registry=_registry()).get_node(llm)
+    fn = GeneratorNode("gen", "d", behaviors=groups, registry=_registry(), collection=_empty_collection()).get_node(llm)
 
     fn.invoke({"user_message": "hi"})
     first = llm.gen_prompts[0]
@@ -327,25 +336,27 @@ def test_behaviors_loaded_from_path(tmp_path):
         ),
         encoding="utf-8",
     )
-    node = GeneratorNode("gen", "d", behaviors=str(path), registry=_registry())
+    node = GeneratorNode("gen", "d", behaviors=str(path), registry=_registry(), collection=_empty_collection())
     assert "## Answer directly" in node.behaviors_text
     assert "- no chatter" in node.behaviors_text
 
 
 def test_behaviors_default_path_loads_committed_file():
-    node = GeneratorNode("gen", "d")
+    node = GeneratorNode("gen", "d", collection=_empty_collection())
     assert "Explain concepts" in node.behaviors_text
 
 
 def test_behaviors_rejects_non_group_items():
     with pytest.raises(TypeError, match="BehaviorGroup"):
-        GeneratorNode("gen", "d", behaviors=[{"title": "T", "points": []}])
+        GeneratorNode(
+            "gen", "d", behaviors=[{"title": "T", "points": []}], collection=_empty_collection()
+        )
 
 
 # ---------------------------------------------------------------- reuse flag
 
 
-def test_reuse_ids_collected_from_spec():
+def test_reuse_ids_collected_from_spec(tmp_path):
     spec = [
         tool_call("c1", "add_node", {"id": "a", "type": "text", "name": "n", "description": "d", "prompt": "Answer {user_message}", "params": {"user_message": "str"}, "reuse": True}),
         tool_call("c2", "add_node", {"id": "b", "type": "text", "name": "m", "description": "d", "prompt": "Beep"}),
@@ -354,7 +365,10 @@ def test_reuse_ids_collected_from_spec():
         tool_call("c5", "add_edge", {"source": "b", "target": "END"}),
     ]
     llm = GeneratorLLM([calls_message(*spec)])
-    fn = GeneratorNode("gen", "d", behaviors=[], registry=_registry()).get_node(llm)
+    fn = GeneratorNode(
+        "gen", "d", behaviors=[], save_path=tmp_path / "collection.json",
+        registry=_registry(), collection=_empty_collection(),
+    ).get_node(llm)
 
     fn.invoke({"user_message": "hi"})
     assert fn.reuse_ids == ["a"]
@@ -366,16 +380,16 @@ def test_reuse_ids_collected_from_spec():
 def test_ctor_rejects_bad_retries():
     for bad in (-1, "3", True):
         with pytest.raises(ValueError, match="retries"):
-            GeneratorNode("gen", "d", retries=bad)
+            GeneratorNode("gen", "d", retries=bad, collection=_empty_collection())
 
 
 def test_ctor_rejects_bad_behaviors_type():
     with pytest.raises(TypeError, match="behaviors must be"):
-        GeneratorNode("gen", "d", behaviors=42)
+        GeneratorNode("gen", "d", behaviors=42, collection=_empty_collection())
 
 
 def test_updated_only_allows_metadata():
-    node = GeneratorNode("gen", "d", behaviors=[], registry=_registry())
+    node = GeneratorNode("gen", "d", behaviors=[], registry=_registry(), collection=_empty_collection())
     renamed = node.updated(name="new")
     assert renamed.name == "new"
     assert renamed.description == node.description
@@ -386,7 +400,7 @@ def test_updated_only_allows_metadata():
 
 
 def test_metadata_and_template_fixed():
-    node = GeneratorNode("gen", "explains", behaviors=[], registry=_registry())
+    node = GeneratorNode("gen", "explains", behaviors=[], registry=_registry(), collection=_empty_collection())
     assert node.params == {"user_message": str}
     assert node.writes == {"result": "response"}
     assert node.prompt.startswith("Build a single-pass graph")
