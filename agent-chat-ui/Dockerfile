@@ -4,13 +4,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
 
-RUN corepack enable
-
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 
 EXPOSE 3000
 
-CMD ["pnpm", "dev", "--hostname", "0.0.0.0"]
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
