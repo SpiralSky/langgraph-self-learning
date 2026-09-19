@@ -78,14 +78,21 @@ otherwise a JSON `{"calls": [{name, args}, ...]}` blob parsed from `content`.
 Malformed output raises `TypeError`/`ValueError`; the retry loop classifies
 every raw error into a `Rejection` (code + verbatim detail + optional
 remediation hint) via `classify_rejection` and feeds the result back as
-categorized rejection lines before regenerating.
+categorized rejection lines before regenerating. Beyond the *structural*
+checks, a build-time **data-flow check** (`validate_produced_inputs`) rejects
+text steps that read a state field no upstream step writes — the field would
+stay `None` and crash the turn at runtime — classified as
+`unproduced-input` with a hint telling the model the only starting field is
+`input` (the user's message), fed from the outer `user_message` via the
+bridge `input_map={"input": "user_message"}`.
 
 ### Inner state auto-build
 
 `build_state_model(nodes) -> type[BaseModel]` derives the inner graph's pydantic
 state model as the union of every node's declared `params` keys (typed by the
 node's actual annotation) plus every `writes` target key (defaulting to `str`)
-plus the always-present `user_message` and `response` fields — so the generated
+plus the always-present `input` (the user's message) and `response` fields —
+so the generated
 structure always validates against its own schema.
 
 ## Execution flow
@@ -103,16 +110,16 @@ structure always validates against its own schema.
 3. For each attempt (initial + `retries` whole-spec re-generations): invoke the
    LLM, decode the builder calls into nodes/edges — resolving
    `from_collection` ids to the collection's live nodes — assemble the
-   `Graph`, and run `graph.validate()`. Any `GraphValidationError` (or
-   decode/build error) is classified into a `Rejection` (code + verbatim
-   detail + optional hint) and appended to the prompt as `- <detail>` feedback
-   lines, with `Fix: <hint>` when a remediation hint applies; the spec is then
-   regenerated in full.
+   `Graph`, and run `graph.validate()` plus the produced-inputs data-flow
+   check. Any `GraphValidationError` (or decode/build/data-flow error) is
+   classified into a `Rejection` (code + verbatim detail + optional hint) and
+   appended to the prompt as `- <detail>` feedback lines, with `Fix: <hint>`
+   when a remediation hint applies; the spec is then regenerated in full.
 4. After `retries + 1` total attempts without a valid graph, raise
    `RuntimeError` naming the last errors.
 5. On success, wrap the inner `Graph` as a `GraphNode`
-   (`input_map={"user_message": ...}`, `output_map={"response": ...}`) and run
-   it through the existing nested-subgraph machinery; the node returns
+   (`input_map={"input": "user_message"}`, `output_map={"response": ...}`) and
+   run it through the existing nested-subgraph machinery; the node returns
    `{"response": <terminal output>}`.
 6. `_GeneratorFn` exposes `last_graph` (the generated `Graph`) and `reuse_ids`
    after a successful run, and auto-saves the reuse artifacts at end of turn
@@ -143,7 +150,10 @@ result = fn.invoke({"user_message": "Compare closures and classes"})
   partial edits.
 - **Validation is the gate** — the internal `Graph.validate()`/`compile` path
   (structure, roles, exactly-one START, param/write fields, duplicate ids)
-  decides success; the LLM sees only aggregate error text between attempts.
+  plus the generator's data-flow check (every field a text step reads is
+  `input` — the first step declares it as `params {"input": "str"}` — or a
+  state key an upstream step's `writes` produces) decides success; the LLM
+  sees only aggregate error text between attempts.
 - **Nested execution** — the generated graph is not compiled into the outer
   graph; it runs in-turn through the `GraphNode` bridge, so it composes
   exactly like any other node.
@@ -173,12 +183,18 @@ result = fn.invoke({"user_message": "Compare closures and classes"})
 
 ## Tests
 
-- `tests/test_generator.py` (31 tests) — template/behaviors assembly,
+- `tests/test_generator.py` (37 tests) — template/behaviors assembly,
   decode paths, inner state auto-build, retry loop with error feedback, nested
-  execution, failure exhaustion, and the rejection framework / reserved-id
-  contract: `classify_rejection` hint+fallback, reserved-id feedback recovery,
-  the persistent reserved-id failure reproducing the production error, the
-  prompt/tool-def reservation contract, and the decode-error hint.
+  execution, failure exhaustion, and the rejection framework / reserved-id +
+  produced-inputs contract: `classify_rejection` hint+fallback, reserved-id
+  feedback recovery, the persistent reserved-id failure reproducing the
+  production error, the prompt/tool-def reservation contract, the decode-error
+  hint, the produced-inputs data-flow check (recovers with feedback, the
+  persistent unproduced-input failure reproducing the production error, the
+  direct `validate_produced_inputs` filter, the `unproduced-input` classifier
+  hint, the prompt/tool-def input-production contract, and the input-only
+  starting-field regression (first step reading `input` is valid; reading the
+  stale `user_message` is rejected)).
 - `tests/test_generator_reuse.py` (13 tests) — retrieve step (skipped on an
   empty collection, catalog rendering, known/unknown/malformed id handling),
   builder `from_collection` resolution (unknown id, repeated pull, fresh-spec

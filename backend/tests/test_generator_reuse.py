@@ -53,8 +53,8 @@ def valid_text_calls():
                 "type": "text",
                 "name": "answer",
                 "description": "answers",
-                "prompt": "Answer {user_message}",
-                "params": {"user_message": "str"},
+                "prompt": "Answer {input}",
+                "params": {"input": "str"},
                 "writes": {"result": "response"},
             },
         ),
@@ -86,8 +86,8 @@ def _catalog_node(run_counts=0):
     node = TextNode(
         "answer",
         "answers the questions",
-        "Answer {user_message}",
-        params={"user_message": str},
+        "Answer {input}",
+        params={"input": str},
         writes={"result": "response"},
     )
     node.run_counts = run_counts
@@ -291,7 +291,7 @@ def test_fresh_reuse_and_pull_in_same_graph_no_double_add(tmp_path):
     spec = [
         tool_call("c1", "add_node", {"id": "r", "type": "text", "name": "answer", "description": "answers", "from_collection": cid}),
         tool_call(
-            "c2", "add_node", {"id": "b", "type": "text", "name": "another", "description": "fresh step", "prompt": "Beep {user_message}", "params": {"user_message": "str"}, "writes": {"result": "response"}, "reuse": True}
+            "c2", "add_node", {"id": "b", "type": "text", "name": "another", "description": "fresh step", "prompt": "Beep {input}", "params": {"input": "str"}, "writes": {"result": "response"}, "reuse": True}
         ),
         tool_call("c3", "add_edge", {"source": "START", "target": "r"}),
         tool_call("c4", "add_edge", {"source": "r", "target": "b"}),

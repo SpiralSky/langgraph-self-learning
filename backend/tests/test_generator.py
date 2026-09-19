@@ -22,6 +22,7 @@ from graphs.nodes.generator import (
     build_state_model,
     classify_rejection,
     decode_builder_calls,
+    validate_produced_inputs,
 )
 from graphs.structure.graph import Graph
 from graphs.nodes.text_node import TextNode
@@ -56,8 +57,8 @@ def valid_text_calls():
                 "type": "text",
                 "name": "answer",
                 "description": "answers",
-                "prompt": "Answer {user_message}",
-                "params": {"user_message": "str"},
+                "prompt": "Answer {input}",
+                "params": {"input": "str"},
                 "writes": {"result": "response"},
             },
         ),
@@ -154,16 +155,16 @@ def test_build_state_model_unions_params_writes_and_defaults():
         "a": TextNode(
             "a",
             "d",
-            "P {user_message}",
-            params={"user_message": str},
+            "P {input}",
+            params={"input": str},
             writes={"result": "notes"},
         ),
         "b": ToolCallNode("b", "d", "echo", _registry()),
     }
     model = build_state_model(nodes)
     fields = model.model_fields
-    assert set(fields) == {"user_message", "notes", "response", "tool", "args"}
-    assert fields["user_message"].annotation is str
+    assert set(fields) == {"input", "notes", "response", "tool", "args"}
+    assert fields["input"].annotation is str
     assert fields["notes"].annotation is str
     assert fields["tool"].annotation is str
     assert fields["args"].annotation is dict
@@ -187,7 +188,7 @@ def test_single_pass_spec_builds_and_runs_nested():
     assert result == {"response": "inner:Answer hi"}
     assert isinstance(fn.last_graph, Graph)
     fields = fn.last_graph.state_model.model_fields
-    assert set(fields) == {"user_message", "response"}
+    assert set(fields) == {"input", "response"}
     assert fn.reuse_ids == []
 
 
@@ -267,8 +268,8 @@ def _reserved_id_bad_call():
                 "type": "text",
                 "name": "first",
                 "description": "starts",
-                "prompt": "Intro {user_message}",
-                "params": {"user_message": "str"},
+                "prompt": "Intro {input}",
+                "params": {"input": "str"},
                 "writes": {"result": "response"},
             },
         )
@@ -308,6 +309,162 @@ def test_persistent_reserved_id_failure_reproduces_prod_error():
         fn.invoke({"user_message": "hi"})
     assert len(llm.gen_prompts) == 4
     assert all("Fix:" in prompt for prompt in llm.gen_prompts[1:])
+
+
+def _unproduced_input_bad_call():
+    return calls_message(
+        tool_call(
+            "c0",
+            "add_node",
+            {
+                "id": "first_step",
+                "type": "text",
+                "name": "first_step",
+                "description": "starts",
+                "prompt": "You are an assistant. {user_request}",
+                "params": {"user_request": "str"},
+                "writes": {"result": "response"},
+            },
+        ),
+        tool_call("c1", "add_edge", {"source": "START", "target": "first_step"}),
+        tool_call("c2", "add_edge", {"source": "first_step", "target": "END"}),
+    )
+
+
+def test_unproduced_input_feedback_recovers():
+    llm = GeneratorLLM([_unproduced_input_bad_call(), calls_message(*valid_text_calls())])
+    fn = _gen().get_node(llm)
+
+    assert fn.invoke({"user_message": "hi"}) == {"response": "inner:Answer hi"}
+    assert len(llm.gen_prompts) == 2
+    second = llm.gen_prompts[1]
+    assert "reads state field 'user_request'" in second
+    assert "no upstream step writes" in second
+    assert "Fix:" in second
+    assert "input" in second
+
+
+def test_persistent_unproduced_input_failure_reproduces_prod_error():
+    llm = GeneratorLLM([_unproduced_input_bad_call()] * 4)
+    fn = _gen().get_node(llm)
+
+    with pytest.raises(
+        RuntimeError,
+        match="after 4 attempts: reads state field 'user_request' that no "
+        "upstream step writes",
+    ):
+        fn.invoke({"user_message": "hi"})
+    assert len(llm.gen_prompts) == 4
+    assert all("Fix:" in prompt for prompt in llm.gen_prompts[1:])
+
+
+def test_validate_produced_inputs_flags_only_unproduced_reads():
+    nodes = {
+        "a": TextNode(
+            "a",
+            "d",
+            "Do {input}",
+            params={"input": str},
+            writes={"result": "notes"},
+        ),
+        "b": TextNode("b", "d", "Use {notes}", params={"notes": str}),
+    }
+    graph = Graph(state_model=build_state_model(nodes))
+    graph.add_node("a", nodes["a"])
+    graph.add_node("b", nodes["b"])
+    graph.add_edge("e1", "START", "a")
+    graph.add_edge("e2", "a", "b")
+    graph.add_edge("e3", "b", "END")
+    assert validate_produced_inputs(graph) == []
+
+    bad = TextNode(
+        "c",
+        "d",
+        "See {missing}",
+        params={"missing": str},
+        writes={"result": "response"},
+    )
+    graph.add_node("c", bad)
+    graph.add_edge("e4", "b", "c")
+    errors = validate_produced_inputs(graph)
+    assert errors == [
+        "reads state field 'missing' that no upstream step writes (node 'c')"
+    ]
+
+
+def test_classify_rejection_unproduced_input_hint():
+    r = classify_rejection(
+        "reads state field 'user_request' that no upstream step writes (node 'first_step')"
+    )
+    assert isinstance(r, Rejection)
+    assert r.code == "unproduced-input"
+    assert r.hint
+    assert "input" in r.hint
+
+
+def test_template_and_tool_defs_teach_produced_inputs():
+    assert "The only field present when the graph starts is" in _GENERATOR_TEMPLATE
+    assert "upstream step's \"writes\"" in _GENERATOR_TEMPLATE
+    assert "input" in _GENERATOR_TEMPLATE
+    assert "the first step" in _GENERATOR_TEMPLATE
+    assert '{{"input": "str"}}' in _GENERATOR_TEMPLATE
+    params_def = next(
+        d for d in BUILDER_TOOL_DEFS if d["function"]["name"] == "add_node"
+    )["function"]["parameters"]["properties"]["params"]["description"]
+    assert "input" in params_def
+    assert "upstream step's writes" in params_def
+
+
+def test_input_is_the_only_starting_field_regression():
+    """The inner graph starts at ``input``; the old ``user_message`` is now
+    an unproduced field and the spec must be rejected with feedback."""
+    good = [
+        tool_call(
+            "c1",
+            "add_node",
+            {
+                "id": "a",
+                "type": "text",
+                "name": "answer",
+                "description": "answers",
+                "prompt": "Answer {input}",
+                "params": {"input": "str"},
+            },
+        ),
+        tool_call("c2", "add_edge", {"source": "START", "target": "a"}),
+        tool_call("c3", "add_edge", {"source": "a", "target": "END"}),
+    ]
+    llm = GeneratorLLM([calls_message(*good)])
+    fn = _gen().get_node(llm)
+
+    assert fn.invoke({"user_message": "hi"}) == {"response": "inner:Answer hi"}
+    assert fn.last_graph is not None
+    assert validate_produced_inputs(fn.last_graph) == []
+
+    stale = [
+        tool_call(
+            "c1",
+            "add_node",
+            {
+                "id": "a",
+                "type": "text",
+                "name": "answer",
+                "description": "answers",
+                "prompt": "Answer {user_message}",
+                "params": {"user_message": "str"},
+            },
+        ),
+        tool_call("c2", "add_edge", {"source": "START", "target": "a"}),
+        tool_call("c3", "add_edge", {"source": "a", "target": "END"}),
+    ]
+    llm = GeneratorLLM([calls_message(*stale)] * 4)
+    fn = _gen().get_node(llm)
+    with pytest.raises(
+        RuntimeError,
+        match="after 4 attempts: reads state field 'user_message' that no "
+        "upstream step writes",
+    ):
+        fn.invoke({"user_message": "hi"})
 
 
 def test_template_and_tool_defs_forbid_reserved_node_ids():
@@ -406,7 +563,7 @@ def test_inner_state_model_uses_declared_list_type():
     fn.invoke({"user_message": "hi"})
     fields = fn.last_graph.state_model.model_fields
     assert fields["notes"].annotation is list
-    assert fields["user_message"].annotation is str
+    assert fields["input"].annotation is str
     assert fields["response"].annotation is str
 
 
@@ -457,7 +614,7 @@ def test_behaviors_rejects_non_group_items():
 
 def test_reuse_ids_collected_from_spec(tmp_path):
     spec = [
-        tool_call("c1", "add_node", {"id": "a", "type": "text", "name": "n", "description": "d", "prompt": "Answer {user_message}", "params": {"user_message": "str"}, "reuse": True}),
+        tool_call("c1", "add_node", {"id": "a", "type": "text", "name": "n", "description": "d", "prompt": "Answer {input}", "params": {"input": "str"}, "reuse": True}),
         tool_call("c2", "add_node", {"id": "b", "type": "text", "name": "m", "description": "d", "prompt": "Beep"}),
         tool_call("c3", "add_edge", {"source": "START", "target": "a"}),
         tool_call("c4", "add_edge", {"source": "a", "target": "b"}),

@@ -50,8 +50,8 @@ def reuse_single_spec():
                 "type": "text",
                 "name": "answer",
                 "description": "answers",
-                "prompt": "Answer {user_message}",
-                "params": {"user_message": "str"},
+                "prompt": "Answer {input}",
+                "params": {"input": "str"},
                 "writes": {"result": "response"},
                 "reuse": True,
             },
@@ -72,8 +72,8 @@ def reuse_chain_spec():
                 "type": "text",
                 "name": "first",
                 "description": "first step",
-                "prompt": "Start {user_message}",
-                "params": {"user_message": "str"},
+                "prompt": "Start {input}",
+                "params": {"input": "str"},
                 "writes": {"result": "notes"},
                 "reuse": True,
             },
@@ -109,8 +109,8 @@ def plain_spec():
                 "type": "text",
                 "name": "answer",
                 "description": "answers",
-                "prompt": "Answer {user_message}",
-                "params": {"user_message": "str"},
+                "prompt": "Answer {input}",
+                "params": {"input": "str"},
                 "writes": {"result": "response"},
             },
         ),
@@ -179,7 +179,7 @@ def test_wrap_reused_chain_returns_graph_node():
     chain = wrap_reused(["a", "b"], graph, name="gen", description="d")
     assert len(chain) == 1
     assert isinstance(chain[0], GraphNode)
-    assert chain[0].input_map == {"user_message": "user_message"}
+    assert chain[0].input_map == {"input": "user_message"}
     assert chain[0].output_map == {"response": "response"}
     assert set(chain[0].graph.nodes()) == {"a", "b"}
 
@@ -227,7 +227,7 @@ def test_reuse_single_node_stored_and_persisted(tmp_path):
     node = restored.snapshot()[0]
     assert isinstance(node, TextNode)
     assert node.name == "answer"
-    assert node.prompt == "Answer {user_message}"
+    assert node.prompt == "Answer {input}"
     assert node.writes == {"result": "response"}
 
 
@@ -292,7 +292,7 @@ def test_reuse_chain_stored_as_graph_node_round_trips(tmp_path):
     assert isinstance(again, GraphNode)
     assert again.name == stored.name
     assert set(again.graph.nodes()) == {"a", "b"}
-    assert again.input_map == {"user_message": "user_message"}
+    assert again.input_map == {"input": "user_message"}
     assert again.output_map == {"response": "response"}
 
     restored = load_collection(path, embedder=_embed)
