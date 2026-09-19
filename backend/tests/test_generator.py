@@ -6,6 +6,8 @@ tool runs against a tiny injected whitelist registry. No network, no real
 tools, no default-registry client construction.
 """
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 import yaml
 from langchain_core.messages import AIMessage
@@ -15,7 +17,10 @@ from graphs.learning.behaviors import BehaviorGroup, BehaviorPoint
 from graphs.nodes.generator import (
     BUILDER_TOOL_DEFS,
     GeneratorNode,
+    Rejection,
+    _GENERATOR_TEMPLATE,
     build_state_model,
+    classify_rejection,
     decode_builder_calls,
 )
 from graphs.structure.graph import Graph
@@ -247,6 +252,100 @@ def test_unknown_builder_call_is_retry_feedback():
 
     fn.invoke({"user_message": "hi"})
     assert "unknown builder call 'explode'" in llm.gen_prompts[1]
+
+
+# -------------------------------------- rejection framework / reserved node ids
+
+
+def _reserved_id_bad_call():
+    return calls_message(
+        tool_call(
+            "c0",
+            "add_node",
+            {
+                "id": "START",
+                "type": "text",
+                "name": "first",
+                "description": "starts",
+                "prompt": "Intro {user_message}",
+                "params": {"user_message": "str"},
+                "writes": {"result": "response"},
+            },
+        )
+    )
+
+
+def _gen(registry=None) -> GeneratorNode:
+    return GeneratorNode(
+        "gen",
+        "d",
+        behaviors=[],
+        retries=3,
+        registry=registry or _registry(),
+        collection=_empty_collection(),
+    )
+
+
+def test_reserved_node_id_feedback_recovers():
+    llm = GeneratorLLM([_reserved_id_bad_call(), calls_message(*valid_text_calls())])
+    fn = _gen().get_node(llm)
+
+    assert fn.invoke({"user_message": "hi"}) == {"response": "inner:Answer hi"}
+    assert len(llm.gen_prompts) == 2
+    second = llm.gen_prompts[1]
+    assert "node id is reserved: 'START'" in second
+    assert "framework ids" in second
+    assert "Fix:" in second
+
+
+def test_persistent_reserved_id_failure_reproduces_prod_error():
+    llm = GeneratorLLM([_reserved_id_bad_call()] * 4)
+    fn = _gen().get_node(llm)
+
+    with pytest.raises(
+        RuntimeError, match="after 4 attempts: node id is reserved: 'START'"
+    ):
+        fn.invoke({"user_message": "hi"})
+    assert len(llm.gen_prompts) == 4
+    assert all("Fix:" in prompt for prompt in llm.gen_prompts[1:])
+
+
+def test_template_and_tool_defs_forbid_reserved_node_ids():
+    assert "add_node" in _GENERATOR_TEMPLATE
+    assert "START" in _GENERATOR_TEMPLATE
+    assert "END" in _GENERATOR_TEMPLATE
+    assert "reserved" in _GENERATOR_TEMPLATE
+    assert "never created with add_node" in _GENERATOR_TEMPLATE
+    add_node_def = next(
+        d for d in BUILDER_TOOL_DEFS if d["function"]["name"] == "add_node"
+    )
+    id_desc = add_node_def["function"]["parameters"]["properties"]["id"]["description"]
+    assert "reserved" in id_desc
+
+
+def test_classify_rejection_hint_and_fallback():
+    r = classify_rejection("node id is reserved: 'START'")
+    assert isinstance(r, Rejection)
+    assert r.code == "reserved-id"
+    assert r.hint
+    assert r.detail == "node id is reserved: 'START'"
+
+    generic = classify_rejection("text node needs a non-empty 'prompt'")
+    assert generic.code == "error"
+    assert generic.hint is None
+    assert generic.detail == "text node needs a non-empty 'prompt'"
+
+    with pytest.raises(FrozenInstanceError):
+        r.hint = "mutated"
+
+
+def test_decode_error_gets_decode_hint():
+    llm = GeneratorLLM([AIMessage(content="not json"), calls_message(*valid_text_calls())])
+    fn = _gen().get_node(llm)
+
+    fn.invoke({"user_message": "hi"})
+    assert "Fix:" in llm.gen_prompts[1]
+    assert "valid JSON" in llm.gen_prompts[1]
 
 
 # ------------------------------------------------------------------ tool path

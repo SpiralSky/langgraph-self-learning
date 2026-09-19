@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from langchain_core.runnables import Runnable
@@ -47,6 +48,70 @@ from graphs.nodes.tool_node import ToolCallNode
 from graphs.persistence.serialization import deserialize_annotation
 from graphs.persistence.storage import COLLECTION_PATH, dump_collection, load_collection
 from graphs.tools import ToolRegistry, default_registry
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """One rejection reason sent back to the builder LLM."""
+
+    code: str
+    detail: str  # raw error message, verbatim (kept: exception text, test substrings)
+    hint: str | None = None
+
+
+#: Ordered (error-prefix, code, hint) rules; first match wins. One row per
+#: rejectable condition = the extension point for new rejection kinds.
+_REJECTION_RULES: tuple[tuple[str, str, str], ...] = (
+    (
+        "node id is reserved",
+        "reserved-id",
+        "START and END are framework ids: they may only appear as add_edge "
+        "endpoints and can never be an add_node id; pick a different, "
+        "descriptive id for this step (e.g. first_step).",
+    ),
+    (
+        "duplicate node id",
+        "duplicate-id",
+        "every add_node id must be unique in the graph; pick a different id.",
+    ),
+    (
+        "unknown node type",
+        "unknown-type",
+        "add_node 'type' must be \"text\" or \"tool\".",
+    ),
+    (
+        "unknown tool",
+        "unknown-tool",
+        "add_node 'tool' must be a whitelisted registered name (e.g. ddgs, "
+        "mem0_remember, mem0_retrieve).",
+    ),
+    (
+        "unknown builder call",
+        "unknown-call",
+        "emit only add_node and add_edge calls.",
+    ),
+    (
+        "builder JSON is not valid JSON",
+        "decode-json",
+        "the response 'calls' content must be a single valid JSON object "
+        "(\"calls\": [{name, args}, ...]).",
+    ),
+    (
+        "LLM response carried no builder tool calls",
+        "decode-empty",
+        "return at least one add_node/add_edge call (as tool calls or as a "
+        "\"calls\" JSON array).",
+    ),
+)
+
+
+def classify_rejection(error: str) -> Rejection:
+    """Classify one raw error string; unknown errors fall through generic."""
+    for prefix, code, hint in _REJECTION_RULES:
+        if error.startswith(prefix):
+            return Rejection(code=code, detail=error, hint=hint)
+    return Rejection(code="error", detail=error)
+
 
 _GENERATOR_TEMPLATE = """Build a single-pass graph that fulfills the user's request.
 Return the entire graph in ONE response as builder tool calls: zero or more
@@ -69,6 +134,9 @@ add_node(id, type, name, description, prompt?, params?, writes?, tool?, reuse?)
   - set "from_collection" to a collection node id to reuse an existing step
     from the "Reusable steps" list instead of building one; then omit
     "prompt", "params", "writes", and "tool" (fresh or pulled, never both).
+  - the ids "START" and "END" are reserved by the framework: they only appear
+    as add_edge source/target and are never created with add_node; give every
+    step its own descriptive id (e.g. first_step, lookup, answer).
 
 add_edge(source, target)
   - wires step "source" to step "target"; the reserved ids START and END
@@ -95,7 +163,14 @@ BUILDER_TOOL_DEFS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Unique step id referenced by add_edge."},
+                    "id": {
+                        "type": "string",
+                        "description": (
+                            "Unique step id referenced by add_edge; must not "
+                            "be START or END (reserved framework ids; they "
+                            "appear only as add_edge endpoints)."
+                        ),
+                    },
                     "type": {"type": "string", "enum": ["text", "tool"]},
                     "name": {"type": "string", "description": "Step name."},
                     "description": {"type": "string", "description": "What this step does."},
@@ -405,14 +480,19 @@ class _GeneratorFn:
             return self._llm.bind_tools(BUILDER_TOOL_DEFS)
         return self._llm
 
-    def _assemble(self, user_message: object, errors: list[str]) -> str:
+    def _assemble(
+        self, user_message: object, rejections: list[Rejection]
+    ) -> str:
         prompt = self._prompt.format(user_message=user_message)
         prompt += self._behaviors_text
         prompt += self._reuse_section()
-        if errors:
+        if rejections:
             prompt += (
                 "\n\nThe previous attempt was rejected for these reasons:\n"
-                + "\n".join(f"- {error}" for error in errors)
+                + "\n".join(
+                    f"- {r.detail}" + (f" Fix: {r.hint}" if r.hint else "")
+                    for r in rejections
+                )
                 + "\n\nReturn a corrected full graph specification."
             )
         return prompt
@@ -508,38 +588,38 @@ class _GeneratorFn:
 
     def _generate_sync(self, user_message: object) -> Graph:
         self._retrieve(user_message)
-        last_errors: list[str] = []
+        last_errors: list[Rejection] = []
         bound = self._bind()
         for _ in range(self._retries + 1):
             prompt = self._assemble(user_message, last_errors)
             try:
                 calls = decode_builder_calls(bound.invoke(prompt))
             except (TypeError, ValueError) as exc:
-                last_errors = [str(exc)]
+                last_errors = [classify_rejection(str(exc))]
                 continue
             graph, errors = self._build_graph(calls)
             self._merge_validation(graph, errors)
             if not errors:
                 return graph
-            last_errors = errors
+            last_errors = [classify_rejection(e) for e in errors]
         self._raise_generation_failed(last_errors, self._retries + 1)
 
     async def _generate_async(self, user_message: object) -> Graph:
         await self._aretrieve(user_message)
-        last_errors: list[str] = []
+        last_errors: list[Rejection] = []
         bound = self._bind()
         for _ in range(self._retries + 1):
             prompt = self._assemble(user_message, last_errors)
             try:
                 calls = decode_builder_calls(await bound.ainvoke(prompt))
             except (TypeError, ValueError) as exc:
-                last_errors = [str(exc)]
+                last_errors = [classify_rejection(str(exc))]
                 continue
             graph, errors = self._build_graph(calls)
             self._merge_validation(graph, errors)
             if not errors:
                 return graph
-            last_errors = errors
+            last_errors = [classify_rejection(e) for e in errors]
         self._raise_generation_failed(last_errors, self._retries + 1)
 
     @staticmethod
@@ -550,8 +630,14 @@ class _GeneratorFn:
             errors.extend(exc.errors)
 
     @staticmethod
-    def _raise_generation_failed(last_errors: list[str], attempts: int) -> None:
-        detail = "; ".join(last_errors) if last_errors else "unknown generation error"
+    def _raise_generation_failed(
+        rejections: list[Rejection], attempts: int
+    ) -> None:
+        detail = (
+            "; ".join(r.detail for r in rejections)
+            if rejections
+            else "unknown generation error"
+        )
         raise RuntimeError(
             f"could not generate a valid graph after {attempts} attempts: {detail}"
         )

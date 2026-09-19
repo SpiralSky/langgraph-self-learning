@@ -75,8 +75,10 @@ GeneratorNode(
 `decode_builder_calls(response) -> list[{"name", "args"}]` normalizes an LLM
 response to the builder call list: langchain `tool_calls` when present,
 otherwise a JSON `{"calls": [{name, args}, ...]}` blob parsed from `content`.
-Malformed output raises `TypeError`/`ValueError`, which the retry loop feeds
-back as error feedback.
+Malformed output raises `TypeError`/`ValueError`; the retry loop classifies
+every raw error into a `Rejection` (code + verbatim detail + optional
+remediation hint) via `classify_rejection` and feeds the result back as
+categorized rejection lines before regenerating.
 
 ### Inner state auto-build
 
@@ -102,8 +104,10 @@ structure always validates against its own schema.
    LLM, decode the builder calls into nodes/edges — resolving
    `from_collection` ids to the collection's live nodes — assemble the
    `Graph`, and run `graph.validate()`. Any `GraphValidationError` (or
-   decode/build error) is appended to the prompt as `- <error>` feedback lines
-   and the spec is regenerated in full.
+   decode/build error) is classified into a `Rejection` (code + verbatim
+   detail + optional hint) and appended to the prompt as `- <detail>` feedback
+   lines, with `Fix: <hint>` when a remediation hint applies; the spec is then
+   regenerated in full.
 4. After `retries + 1` total attempts without a valid graph, raise
    `RuntimeError` naming the last errors.
 5. On success, wrap the inner `Graph` as a `GraphNode`
@@ -169,9 +173,12 @@ result = fn.invoke({"user_message": "Compare closures and classes"})
 
 ## Tests
 
-- `tests/test_generator.py` (26 tests) — template/behaviors assembly,
+- `tests/test_generator.py` (31 tests) — template/behaviors assembly,
   decode paths, inner state auto-build, retry loop with error feedback, nested
-  execution, failure exhaustion.
+  execution, failure exhaustion, and the rejection framework / reserved-id
+  contract: `classify_rejection` hint+fallback, reserved-id feedback recovery,
+  the persistent reserved-id failure reproducing the production error, the
+  prompt/tool-def reservation contract, and the decode-error hint.
 - `tests/test_generator_reuse.py` (13 tests) — retrieve step (skipped on an
   empty collection, catalog rendering, known/unknown/malformed id handling),
   builder `from_collection` resolution (unknown id, repeated pull, fresh-spec
