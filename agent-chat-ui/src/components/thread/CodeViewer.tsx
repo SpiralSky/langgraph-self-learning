@@ -1,4 +1,4 @@
-import { SyntaxHighlighter } from "./syntax-highlighter";
+import { SyntaxHighlighter } from "@/components/assistant-ui/markdown/syntax-highlighter";
 
 interface CodeViewerProps {
   code: string;
