@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { Markdown } from "@/components/thread/markdown";
+import { Markdown } from "@/components/assistant-ui/markdown";
 
 /**
  * TextWidget — a Discord-style embedded text card.

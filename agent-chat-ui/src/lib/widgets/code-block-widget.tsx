@@ -1,4 +1,4 @@
-import { CodeBlock } from "@/components/thread/code-block";
+import { CodeBlock } from "@/components/assistant-ui/markdown/code-block";
 
 /**
  * CodeBlockWidget — a syntax-highlighted code block with a title bar
