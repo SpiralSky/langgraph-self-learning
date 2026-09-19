@@ -11,3 +11,4 @@ backend/chroma/**
 backend/data/**
 backend/plans/**
 shared/keys/graph_to_code*
+shared/keys/code-runner-password*

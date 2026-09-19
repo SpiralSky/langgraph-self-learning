@@ -5,6 +5,14 @@ networks:
     driver: bridge
   code-net:
     internal: true
+  # Dedicated path for password SSH into code-runner from containers in OTHER
+  # compose projects (they attach to the created network `code-exec-sandbox_ssh-net`
+  # as external, then SSH to code-runner:22). Internal keeps the sandbox without
+  # egress; only code-runner is attached, so its sshd (port 22) is the single
+  # port exposed on this network. The host-published 22022 in the code-runner
+  # service is for host/user access only.
+  ssh-net:
+    internal: true
   mgmt-net:
     driver: bridge
 
@@ -101,19 +109,25 @@ services:
     image: code-runner:base
     build:
       context: ./dockerfile/code-runner
-    networks: [code-net]
+    # code-net = internal sandbox traffic; ssh-net = dedicated cross-compose SSH
+    # path (other projects join code-exec-sandbox_ssh-net as external, reach
+    # code-runner:22). sshd on 22 is the only port listening, so exactly one port
+    # is exposed on ssh-net.
+    networks: [code-net, ssh-net]
     # Password SSH for host/user access only: bound to 127.0.0.1 (LAN-unreachable,
-    # localhost-only) on a non-common port. Containers still reach code-runner via
-    # code-net DNS:22 — the published port is not used for inter-container traffic.
+    # localhost-only) on a non-common port. Containers reach code-runner via
+    # ssh-net/code-net DNS:22 — the published port is not used for inter-container
+    # traffic.
     ports:
       - "127.0.0.1:22022:22"
     environment:
       SSH_PASSWORD_FILE: "/run/secrets/ssh_password"
     volumes:
       - ./workspace:/home/exec/workspace
-      # password lives outside the repo; ro mount (entrypoint flips sshd to
+      # password lives in the repo (gitignored, mode 600) so the mount resolves
+      # independently of host layout; ro mount (entrypoint flips sshd to
       # password-only when this file is present, see dockerfile/code-runner/entrypoint.sh)
-      - ../../other-data/ssh_passwords/code-runner.txt:/run/secrets/ssh_password:ro
+      - ./keys/code-runner-password.txt:/run/secrets/ssh_password:ro
     deploy:
       resources:
         limits:
