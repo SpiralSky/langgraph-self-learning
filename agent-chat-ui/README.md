@@ -27,13 +27,13 @@ cd agent-chat-ui
 Install dependencies:
 
 ```bash
-pnpm install
+npm install
 ```
 
 Run the app:
 
 ```bash
-pnpm dev
+npm run dev
 ```
 
 The app will be available at `http://localhost:3000`.
@@ -233,7 +233,7 @@ Once you've set it up on your deployment, you should make the following changes 
 1. Configure any additional API requests to fetch the authentication token from your LangGraph deployment which will be used to authenticate requests from the client.
 2. Set the `NEXT_PUBLIC_API_URL` environment variable to your production LangGraph deployment URL.
 3. Set the `NEXT_PUBLIC_ASSISTANT_ID` environment variable to the ID of the assistant you want to use when fetching, and submitting runs via the chat interface.
-4. Modify the [`useTypedStream`](src/providers/Stream.tsx) (extension of `useStream`) hook to pass your authentication token through headers to the LangGraph server:
+4. Modify the chat connection hook (`src/hooks/useChatConfig.ts` + `src/lib/chatApi.ts`) to pass your authentication token through headers to the LangGraph server:
 
 ```tsx
 const streamValue = useTypedStream({
