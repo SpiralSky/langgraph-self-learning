@@ -30,7 +30,9 @@ services:
       LEDGER_PATH: "/shared/ledger"
     volumes:
       - ./ledger:/shared/ledger:ro
-    depends_on: [backend]
+    depends_on:
+      backend:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -40,7 +42,8 @@ services:
 
   backend:
     build: ./../backend
-    # langgraph dev --port 2024; API binds to frontend-net IP only (eth0 = first-listed network) so code-net can't reach it.
+    # API binds 0.0.0.0 (docker/entrypoint.sh) so frontend-net DNS + the published
+    # port both work; code-runner has no wired integration yet.
     networks:
       - frontend-net
       - code-net
@@ -48,6 +51,18 @@ services:
       - "2024:2024"
     env_file:
       - ../backend/.env
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:2024/info', timeout=2).getcode()==200 else 1)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
     volumes:
       - ../backend:/app
       - backend-data:/app/data
