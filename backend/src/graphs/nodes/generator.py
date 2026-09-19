@@ -4,9 +4,10 @@ A :class:`GeneratorNode` is the runtime counterpart to a catalog of reusable
 steps: given the user's request plus the sectioned behavior points, it asks an
 LLM for a single-pass list of builder tool calls (``add_node`` / ``add_edge``),
 applies them to a fresh :class:`graphs.graph.Graph` with an automatically
-derived inner state model, validates the structure (retrying the whole spec a
-bounded number of times with error feedback), and finally executes the result
-as a nested subgraph through the existing :class:`GraphNode` bridge machinery.
+derived inner state model, validates the structure and state data flow
+(retrying the whole spec a bounded number of times with error feedback), and
+finally executes the result as a nested subgraph through the existing
+:class:`GraphNode` bridge machinery.
 
 The node catalog is fixed: ``TextNode`` (type ``"text"``) and ``ToolCallNode``
 (type ``"tool"``, whitelisted through a ``ToolRegistry``). Nothing arbitrary
@@ -102,6 +103,15 @@ _REJECTION_RULES: tuple[tuple[str, str, str], ...] = (
         "return at least one add_node/add_edge call (as tool calls or as a "
         "\"calls\" JSON array).",
     ),
+    (
+        "reads state field",
+        "unproduced-input",
+        "the ONLY field present when the graph starts is input (the user's "
+        "message) — the first step must declare it as params {\"input\": "
+        "\"str\"}; any other field a text step reads must be written by an "
+        "upstream step's \"writes\" mapping (e.g. writes: {\"result\": "
+        "\"notes\"} produces state key \"notes\" for later steps to read).",
+    ),
 )
 
 
@@ -124,7 +134,10 @@ add_node(id, type, name, description, prompt?, params?, writes?, tool?, reuse?)
     "str" for text, "list" for a list of strings, "int" for an integer, and
     "dict" for an object. "writes" maps a local output name to a state key;
     the default (result -> response) makes that step's output the final
-    user-facing answer.
+    user-facing answer. The only field present when the graph starts is
+    "input" (the user's message); the first step must declare it as params
+    {{"input": "str"}}; every other field a step reads must be written by an
+    upstream step's "writes".
   - type "tool": a whitelisted tool step. "tool" must be a registered name
     (for example ddgs, mem0_remember, or mem0_retrieve). The tool reads its
     arguments from the state key named "args"; to pass arguments add an
@@ -180,7 +193,7 @@ BUILDER_TOOL_DEFS: list[dict] = [
                     },
                     "params": {
                         "type": "object",
-                        "description": "Text steps only: {field: type-name} with type names str, int, float, bool, list, dict.",
+                        "description": "Text steps only: {field: type-name} with type names str, int, float, bool, list, dict; each field must be input or a state key an upstream step's writes produces.",
                     },
                     "writes": {
                         "type": "object",
@@ -344,8 +357,9 @@ def build_state_model(nodes: Mapping[str, AbstractNode]) -> type[BaseModel]:
 
     The model unions the declared ``params`` keys (typed by the node's actual
     annotation) with the ``writes`` target state keys (``str`` unless a param
-    already typed the key) plus the always-present ``user_message`` and
-    ``response`` fields. Every node reads/writes against the union, so the
+    already typed the key) plus the always-present ``input`` (the user's
+    message) and ``response`` fields. Every node reads/writes against the
+    union, so the
     structure always validates.
     """
     fields: dict[str, type] = {}
@@ -354,12 +368,72 @@ def build_state_model(nodes: Mapping[str, AbstractNode]) -> type[BaseModel]:
             fields[param] = annotation
         for state_key in node.writes.values():
             fields.setdefault(state_key, str)
-    fields.setdefault("user_message", str)
+    fields.setdefault("input", str)
     fields.setdefault("response", str)
     return create_model(
         "GeneratedState",
         **{name: (annotation, None) for name, annotation in fields.items()},
     )
+
+
+def _connection_endpoints(connection: object) -> tuple[str, tuple[str, ...]]:
+    """Return ``(source, targets)`` for a ``Connection``/``RoutingConnection``."""
+    source = connection.source
+    targets = getattr(connection, "targets", None) or (connection.target,)
+    if isinstance(targets, str):
+        targets = (targets,)
+    return source, tuple(targets)
+
+
+def validate_produced_inputs(graph: Graph) -> list[str]:
+    """Generator-build errors for text steps reading never-produced fields.
+
+    A generated graph starts with only ``input`` (the user's message) in
+    state. Every other
+    field a text step reads must be written by some node that runs before it
+    (an ancestor in the edge graph); otherwise the field keeps its ``None``
+    default and the step crashes at runtime with a type validation error.
+    Checking here turns that into a build-time rejection the retry loop can
+    feed back to the builder LLM. Tool steps are exempt — they read the
+    ``args`` key and tolerate an empty (``None``) payload by contract.
+    """
+    nodes = graph.nodes()
+    incoming: dict[str, list[str]] = {node_id: [] for node_id in nodes}
+    for connection in graph.edges().values():
+        source, targets = _connection_endpoints(connection)
+        for target in targets:
+            if target in incoming:
+                incoming[target].append(source)
+
+    def ancestors(node_id: str) -> set[str]:
+        """Node ids on some path from ``START`` to ``node_id`` (excluding it)."""
+        seen: set[str] = set()
+        frontier = list(incoming.get(node_id, ()))
+        while frontier:
+            current = frontier.pop()
+            if current in seen or current in RESERVED_IDS:
+                continue
+            seen.add(current)
+            frontier.extend(incoming.get(current, ()))
+        return seen
+
+    errors: list[str] = []
+    for node_id, node in nodes.items():
+        if not isinstance(node, TextNode):
+            continue
+        params = node.params or {}
+        if not params:
+            continue
+        produced = {"input"}
+        for ancestor in ancestors(node_id):
+            writes = getattr(nodes[ancestor], "writes", None) or {}
+            produced.update(writes.values())
+        for field in sorted(set(params) - produced):
+            errors.append(
+                f"reads state field {field!r} that no upstream step writes "
+                f"(node {node_id!r})"
+            )
+    return errors
 
 
 def wrap_reused(
@@ -374,7 +448,7 @@ def wrap_reused(
     A single flagged id saves that node directly (a deep copy, so the stored
     prototype is detached from the run); multiple flagged ids indicate the
     whole generated chain is the artifact, saved as a :class:`GraphNode`
-    wrapping the full graph with the generator bridge maps (``user_message``
+    wrapping the full graph with the generator bridge maps (``input``
     in, ``response`` out). Empty input yields nothing.
 
     :raises KeyError: if a reuse id is not present in ``graph``.
@@ -390,7 +464,7 @@ def wrap_reused(
             description=description,
             prompt="Reusable graph generated at runtime from the request.",
             graph=graph,
-            input_map={"user_message": "user_message"},
+            input_map={"input": "user_message"},
             output_map={"response": "response"},
         )
     ]
@@ -628,6 +702,7 @@ class _GeneratorFn:
             graph.validate()
         except GraphValidationError as exc:
             errors.extend(exc.errors)
+        errors.extend(validate_produced_inputs(graph))
 
     @staticmethod
     def _raise_generation_failed(
@@ -807,7 +882,7 @@ class _GeneratorFn:
             description=self._description,
             prompt="Auto-generated subgraph produced by a generator node.",
             graph=graph,
-            input_map={"user_message": "user_message"},
+            input_map={"input": "user_message"},
             output_map={"response": "response"},
         )
 
