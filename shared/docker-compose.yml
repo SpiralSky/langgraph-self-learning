@@ -102,9 +102,18 @@ services:
     build:
       context: ./dockerfile/code-runner
     networks: [code-net]
-    # No published ports.
+    # Password SSH for host/user access only: bound to 127.0.0.1 (LAN-unreachable,
+    # localhost-only) on a non-common port. Containers still reach code-runner via
+    # code-net DNS:22 — the published port is not used for inter-container traffic.
+    ports:
+      - "127.0.0.1:22022:22"
+    environment:
+      SSH_PASSWORD_FILE: "/run/secrets/ssh_password"
     volumes:
       - ./workspace:/home/exec/workspace
+      # password lives outside the repo; ro mount (entrypoint flips sshd to
+      # password-only when this file is present, see dockerfile/code-runner/entrypoint.sh)
+      - ../../other-data/ssh_passwords/code-runner.txt:/run/secrets/ssh_password:ro
     deploy:
       resources:
         limits:
