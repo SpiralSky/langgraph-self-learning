@@ -1,8 +1,44 @@
 "use client";
 
 import { MyAssistant } from "@/components/assistant-ui/MyAssistant";
+import { SetupForm } from "@/components/assistant-ui/SetupForm";
 import { Toaster } from "@/components/ui/sonner";
+import { useChatConfig } from "@/hooks/useChatConfig";
 import React from "react";
+
+function AppContent() {
+  const {
+    apiUrl,
+    assistantId,
+    apiKey,
+    authScheme,
+    isAgentBuilder,
+    showSetupForm,
+    setConfig,
+  } = useChatConfig();
+
+  if (showSetupForm) {
+    return (
+      <SetupForm
+        apiUrl={apiUrl}
+        assistantId={assistantId}
+        apiKey={apiKey}
+        isAgentBuilder={isAgentBuilder}
+        onSave={setConfig}
+      />
+    );
+  }
+
+  return (
+    <MyAssistant
+      key={`${apiUrl}|${assistantId}`}
+      apiUrl={apiUrl}
+      assistantId={assistantId}
+      apiKey={apiKey}
+      authScheme={authScheme}
+    />
+  );
+}
 
 export default function DemoPage(): React.ReactNode {
   return (
@@ -14,7 +50,7 @@ export default function DemoPage(): React.ReactNode {
         Approvals
       </a>
       <Toaster />
-      <MyAssistant />
+      <AppContent />
     </React.Suspense>
   );
 }
