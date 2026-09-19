@@ -20,6 +20,13 @@ services:
     environment:
       LANGGRAPH_API_URL: "http://backend:2024"
       NEXT_PUBLIC_API_URL: "http://localhost:3000/api"
+      # The assistant-ui frontend streams `messages`-mode events from the `chat`
+      # graph (see backend/langgraph.json); `agent` is values-mode and renders
+      # nothing in the chat view. Missing id → the setup form would appear.
+      NEXT_PUBLIC_ASSISTANT_ID: "chat"
+      # Same-origin /api/feedback proxy target (PostFeedback → /feedback on the
+      # feedback-api service). Resolves via Docker DNS inside the proxy fetch.
+      NEXT_PUBLIC_FEEDBACK_API_URL: "http://feedback-api:8000"
       LEDGER_PATH: "/shared/ledger"
     volumes:
       - ./ledger:/shared/ledger:ro
@@ -54,6 +61,26 @@ services:
         max-size: "10m"
         max-file: "3"
         tag: "backend"
+
+  feedback-api:
+    # Separate feedback FastAPI (backend/src/api/app.py, POST /feedback), served
+    # on 8000 (not the langgraph server on 2024). The frontend proxies same-origin
+    # /api/feedback → http://feedback-api:8000/feedback.
+    build: ./../backend
+    networks: [frontend-net]
+    ports:
+      - "8000:8000"
+    entrypoint: ["uv", "run", "uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - ../backend/.env
+    volumes:
+      - ../backend:/app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "feedback-api"
 
   code-runner:
     image: code-runner:base
