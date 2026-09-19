@@ -29,3 +29,35 @@ See ``docs/`` for developer/operator documentation:
 | ``docs/generator.md`` | ``GeneratorNode``: single-pass ``add_node``/``add_edge`` graph generation, validate + retry, nested in-turn execution, reuse auto-save |
 | ``docs/data.md`` | Persistence: explicit JSON serializers, atomic storage helpers, ``backend/data/`` layout |
 | ``docs/improvements.md`` | Improvement loop: suggestion → structured patches over behavior entries (whole-entry regeneration + programmatic diff), JSONL storage, most-recent-wins application, node-targeted edits, ``POST /feedback`` API |
+
+## Running
+
+Everything is `uv`-managed (see `pyproject.toml`). From the repository root:
+
+```commandline
+# 1. LangGraph server (the `agent` + `chat` graphs) — port 2024
+cd backend
+uv sync
+uv run langgraph dev --port 2024
+
+# 2. Feedback FastAPI (separate process) — port 8000
+cd backend
+uv run uvicorn api.app:app --port 8000
+
+# 3. Frontend (assistant-ui) — port 3000
+cd agent-chat-ui
+npm install
+npm run dev
+```
+
+Environment / config:
+
+- `backend/.env` — `OPENAI_API_KEY` (or the configured `models.fast` provider)
+  for the LangGraph server plus the feedback LLM.
+- `agent-chat-ui/.env*` — see `.env.example`: `NEXT_PUBLIC_API_URL`
+  (`http://localhost:2024` locally, or `<site>/api` to use the built-in proxy),
+  `NEXT_PUBLIC_ASSISTANT_ID` (default `chat`), and
+  `NEXT_PUBLIC_FEEDBACK_API_URL` (default `http://localhost:8000`) — the
+  frontend forwards same-origin `POST /api/feedback` to the feedback service.
+- Ledger approvals page (`/approvals`): file-based ledger under `LEDGER_PATH`
+  (default `/shared/ledger`); the frontend route is `app/api/ledger/route.ts`.
