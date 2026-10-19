@@ -1,10 +1,24 @@
 # Self Learning
 
-A **LangGraph** project that facilitates learning. Instead of feeding you answers
-directly, the agent asks questions to lead you to the answer yourself. The
-composition of multiple models is used to improve AI output for learning.
+A **LangGraph** project built around two ideas: **Socratic pedagogy** and **runtime graph generation**.
+
+Instead of feeding answers directly, the agent asks guiding questions to lead you to the answer yourself. For each request, an LLM assembles a custom directed graph of reasoning steps at runtime — the shape of the reasoning adapts to every question. A feedback loop lets the system refine its own behavior over time by applying structured patches to a YAML behavior registry.
 
 > Note: Prompt results may vary.
+
+## How it works
+
+```
+Frontend (Next.js :3000)
+    │  streaming messages / feedback
+    ▼
+Backend — LangGraph agent (:2024)
+    │  GeneratorNode → LLM builds + runs inner subgraph per turn
+    │  NodeCollection — saves and reuses steps across turns
+    ▼
+Feedback service (FastAPI :8000)
+    └─ POST /feedback → LLM diff → patches behaviors.yaml
+```
 
 ## Layout
 
@@ -15,6 +29,28 @@ composition of multiple models is used to improve AI output for learning.
   widget fenced blocks, file upload, the approvals ledger page, and per-message feedback.
 - `shared/` — docker-compose code-exec sandbox, approval ledger volume, workspace
   volume, deployment keys.
+
+## Features
+
+- **Runtime graph generation** — `GeneratorNode` calls the LLM with a builder-tool schema (`add_node` / `add_edge`), assembles a DAG of `TextNode` / `ToolCallNode` steps, validates it, and executes it in-turn as a nested LangGraph subgraph.
+- **Node collection & reuse** — steps marked `reuse` are saved to `data/collection.json` with run telemetry (token counts, latency mean/std); future turns retrieve and replay them via semantic search.
+- **Behavior-driven prompts** — agent behaviors live in `backend/behaviors.yaml` as plain data, not hardcoded prompts. Edit the file to change behavior without touching Python.
+- **Self-improvement loop** — `POST /feedback` with a suggestion → LLM regenerates the full behavior registry → structured diff → JSONL patch log → applied to `behaviors.yaml`.
+- **Built-in tools** — DuckDuckGo search and Mem0 long-term memory (fully local: ChromaDB + fastembed, no external API key required).
+- **Generative-UI artifacts** — the backend pushes arbitrary UI to a side panel via the `ui` state channel; the frontend renders it live.
+- **Widget fence renderer** — custom `:::widget` fenced blocks in markdown map to registered React components.
+- **Human-in-the-loop approvals** — the agent can pause and route a decision to the ledger; the frontend `/approvals` page surfaces pending items.
+- **Workspace file browser** — file tree browsing of the shared workspace volume with composer attachments.
+- **Code-execution sandbox** — a Docker `code-runner` service reachable over SSH (localhost:22022) for safe execution of generated code.
+- **Thread sidebar** — persisted LangGraph thread list backed by the LangGraph SDK.
+- **Per-message feedback** — thumbs up/down on any message, proxied from the frontend to the feedback service.
+
+## Prerequisites
+
+- Python 3.11+ and [`uv`](https://github.com/astral-sh/uv)
+- Node.js 20+ and `npm`
+- `OPENAI_API_KEY` set in `backend/.env`
+- Docker + Docker Compose _(optional — required only for the code-runner sandbox and full-stack compose setup)_
 
 ## Running
 
@@ -56,6 +92,12 @@ runs all three in the foreground, stopping them together on Ctrl-C. Requires
 `uv` (and `OPENAI_API_KEY` in `backend/.env`), plus `node`/`npm` for the
 frontend. Excludes the docker-only services (`code-runner`, `manager`).
 
+For the full stack including the code-runner sandbox:
+
+```commandline
+docker compose -f shared/docker-compose.yml up
+```
+
 ## Frontend configuration
 
 Copy `agent-chat-ui/.env.example` to `agent-chat-ui/.env.local` and set:
@@ -72,3 +114,16 @@ Copy `agent-chat-ui/.env.example` to `agent-chat-ui/.env.local` and set:
 See `backend/README.md` for backend configuration, `backend/docs/` for the
 node/collection system, and `agent-chat-ui/.env.example` for the full frontend
 variable list with production examples.
+
+## Further reading
+
+| Doc | Topic |
+|-----|-------|
+| `backend/README.md` | Backend config and environment |
+| `backend/docs/generator.md` | LLM-driven graph generation |
+| `backend/docs/nodes.md` | Node system (TextNode, AbstractNode) |
+| `backend/docs/node-collection.md` | NodeCollection and reuse |
+| `backend/docs/graphs.md` | Graph structure and compilation |
+| `backend/docs/behaviors.md` | Behavior YAML format |
+| `backend/docs/improvements.md` | Feedback loop and patches |
+| `backend/docs/tools.md` | Built-in tools (ddgs, mem0) |
